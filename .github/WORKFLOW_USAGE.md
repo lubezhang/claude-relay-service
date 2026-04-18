@@ -20,17 +20,7 @@
 - Pull Request（仅构建，不推送）
 - 手动触发
 
-### 2. 发布管理 (`release.yml`)
-
-**功能：**
-- 自动创建 GitHub Release
-- 生成更新日志
-- 关联 Docker 镜像版本
-
-**触发条件：**
-- 创建版本标签（如 `v1.0.0`）
-
-### 3. 自动版本发布 (`auto-release.yml`)
+### 2. 自动版本发布 (`auto-release-pipeline.yml`)
 
 **功能：**
 - 自动递增版本号（patch 版本）
