@@ -183,10 +183,16 @@ jobs:
         run: |
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -n "$LATEST_TAG" ]; then
-            CHANGELOG=$(git-cliff --config .github/cliff.toml $LATEST_TAG..HEAD --strip header | grep -v "bump version" | sed '/^$/d' || echo "- 代码优化和改进")
+            RAW_CHANGELOG=$(git-cliff --config .github/cliff.toml $LATEST_TAG..HEAD --strip header | grep -v "bump version" | sed '/^$/d' || echo "- 代码优化和改进")
           else
-            CHANGELOG=$(git-cliff --config .github/cliff.toml --strip header || echo "- 初始版本发布")
+            RAW_CHANGELOG=$(git-cliff --config .github/cliff.toml --strip header || echo "- 初始版本发布")
           fi
+
+          CHANGELOG=$(printf '%s' "$RAW_CHANGELOG" | head -c 6000)
+          if [ ${#RAW_CHANGELOG} -gt 6000 ]; then
+            CHANGELOG="$CHANGELOG\n\n...（更新日志过长，已截断）"
+          fi
+
           echo "content<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

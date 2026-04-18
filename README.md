@@ -22,27 +22,6 @@
 
 ---
 
-## 💎 Claude/Codex 拼车服务推荐
-
-<div align="center">
-
-| 平台 | 服务 | 介绍 |
-|:---|:---|:---|
-| **[pincc.ai](https://pincc.ai/)** | <small>✅ Claude Code<br>✅ Codex CLI</small> | 提供稳定的 Codex CLI 拼车服务<br><br> **全新上线 2API 渠道**：接入CC的效果媲美官方 Anthropic Console 账号，暂不支持 PDF 识别功能 <br>💰 单价：0.8元=1美金额度 |
-
-
-</div>
-
----
-
-## ⚠️ 重要提醒
-
-**使用本项目前请仔细阅读：**
-
-🚨 **服务条款风险**: 使用本项目可能违反Anthropic的服务条款。请在使用前仔细阅读Anthropic的用户协议，使用本项目的一切风险由用户自行承担。
-
-📖 **免责声明**: 本项目仅供技术学习和研究使用，作者不对因使用本项目导致的账户封禁、服务中断或其他损失承担任何责任。
-
 
 ## 🤔 这个项目适合你吗？
 
@@ -55,7 +34,6 @@
 
 ### 适合的场景
 
-✅ **找朋友拼车**: 三五好友一起分摊Claude Code Max订阅  
 ✅ **隐私敏感**: 不想让第三方镜像看到你的对话内容  
 ✅ **技术折腾**: 有基本的技术基础，愿意自己搭建和维护  
 ✅ **稳定需求**: 需要长期稳定的Claude访问，不想受制于镜像站  
@@ -215,7 +193,7 @@ sudo systemctl start redis
 
 ```bash
 # 下载项目
-git clone https://github.com/Wei-Shaw//claude-relay-service.git
+git clone https://github.com/lubezhang/claude-relay-service.git
 cd claude-relay-service
 
 # 安装依赖
