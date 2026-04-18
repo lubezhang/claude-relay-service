@@ -252,3 +252,5 @@ web/apiStats/
 web/admin-spa/dist/
 
 .serena/
+
+docs/superpowers/
