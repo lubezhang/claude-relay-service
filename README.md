@@ -1,10 +1,5 @@
 # Claude Relay Service
 
-> [!CAUTION]
-> **安全更新通知**：v1.1.248 及以下版本存在严重的管理员认证绕过漏洞，攻击者可未授权访问管理面板。
->
-> **请立即更新到 v1.1.249+ 版本**，或迁移到新一代项目 **[CRS 2.0 (sub2api)](https://github.com/Wei-Shaw/sub2api)**
-
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -14,47 +9,7 @@
 [![Docker Build](https://github.com/Wei-Shaw/claude-relay-service/actions/workflows/auto-release-pipeline.yml/badge.svg)](https://github.com/Wei-Shaw/claude-relay-service/actions/workflows/auto-release-pipeline.yml)
 [![Docker Pulls](https://img.shields.io/docker/pulls/weishaw/claude-relay-service)](https://hub.docker.com/r/weishaw/claude-relay-service)
 
-**🔐 自行搭建Claude API中转服务，支持多账户管理**
-
-[English](README_EN.md) • [快速开始](https://pincc.ai/) • [演示站点](https://demo.pincc.ai/admin-next/login) • [公告频道](https://t.me/claude_relay_service)
-
 </div>
-
----
-
-
-## 🤔 这个项目适合你吗？
-
-- 🌍 **地区限制**: 所在地区无法直接访问Claude Code服务？
-- 🔒 **隐私担忧**: 担心第三方镜像服务会记录或泄露你的对话内容？
-- 👥 **成本分摊**: 想和朋友一起分摊Claude Code Max订阅费用？
-- ⚡ **稳定性**: 第三方镜像站经常故障不稳定，影响效率 ？
-
-如果有以上困惑，那这个项目可能适合你。
-
-### 适合的场景
-
-✅ **隐私敏感**: 不想让第三方镜像看到你的对话内容  
-✅ **技术折腾**: 有基本的技术基础，愿意自己搭建和维护  
-✅ **稳定需求**: 需要长期稳定的Claude访问，不想受制于镜像站  
-✅ **地区受限**: 无法直接访问Claude官方服务
-
----
-
-## 💭 为什么要自己搭？
-
-### 现有镜像站可能的问题
-
-- 🕵️ **隐私风险**: 你的对话内容都被人家看得一清二楚，商业机密什么的就别想了
-- 🐌 **性能不稳**: 用的人多了就慢，高峰期经常卡死
-- 💰 **价格不透明**: 不知道实际成本
-
-### 自建的好处
-
-- 🔐 **数据安全**: 所有接口请求都只经过你自己的服务器，直连Anthropic API
-- ⚡ **性能可控**: 就你们几个人用，Max 200刀套餐基本上可以爽用Opus
-- 💰 **成本透明**: 用了多少token一目了然，按官方价格换算了具体费用
-- 📊 **监控完整**: 使用情况、成本分析、性能监控全都有
 
 ---
 
@@ -73,31 +28,6 @@
 - 📊 **监控面板**: Web界面查看所有数据
 - 🛡️ **安全控制**: 访问限制、速率控制、客户端限制
 - 🌐 **代理支持**: 支持HTTP/SOCKS5代理
-
----
-
-## 📋 部署要求
-
-### 硬件要求（最低配置）
-
-- **CPU**: 1核心就够了
-- **内存**: 512MB（建议1GB）
-- **硬盘**: 30GB可用空间
-- **网络**: 能访问到Anthropic API（建议使用US地区的机器）
-- **建议**: 2核4G的基本够了，网络尽量选回国线路快一点的（为了提高速度，建议不要开代理或者设置服务器的IP直连）
-- **经验**: 阿里云、腾讯云的海外主机经测试会被Cloudflare拦截，无法直接访问claude api
-
-### 软件要求
-
-- **Node.js** 18或更高版本
-- **Redis** 6或更高版本
-- **操作系统**: 建议Linux
-
-### 费用估算
-
-- **服务器**: 轻量云服务器，一个月30-60块
-- **Claude订阅**: 看你怎么分摊了
-- **其他**: 域名（可选）
 
 ---
 
