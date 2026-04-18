@@ -38,7 +38,7 @@ jobs:
           if [ "$PARENT_COUNT" -gt 1 ]; then
             MERGE_BASE=$(git merge-base HEAD^1 HEAD^2 2>/dev/null || echo "")
             if [ -n "$MERGE_BASE" ]; then
-              CHANGED_FILES=$(git diff --name-only $MERGE_BASE..HEAD)
+              CHANGED_FILES=$(git diff --name-only "${MERGE_BASE}..HEAD")
             else
               CHANGED_FILES=$(git diff --name-only HEAD^2..HEAD)
             fi
@@ -166,7 +166,7 @@ jobs:
           git add --all -- ':!node_modules'
           git commit -m "chore: update frontend build for v${{ steps.next_version.outputs.new_version }} [skip ci]"
           git push origin web-dist --force
-          git checkout main
+          git checkout -
           rm -rf "$TEMP_DIR"
 
       - name: Install git-cliff
@@ -196,7 +196,7 @@ jobs:
         run: |
           NEW_TAG="${{ steps.next_version.outputs.new_tag }}"
           git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
-          git push origin HEAD:main "$NEW_TAG"
+          git push origin HEAD:${{ github.ref_name }} "$NEW_TAG"
 
       - name: Create GitHub Release
         if: steps.check.outputs.needs_bump == 'true'
