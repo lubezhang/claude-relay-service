@@ -55,4 +55,32 @@ describe('llm protocol bridge block helpers', () => {
       warnings: []
     })
   })
+
+  test('serializes blocks with visible warnings', () => {
+    expect(
+      serializeBlocks(
+        [
+          { type: 'text', text: 'describe this' },
+          {
+            type: 'image',
+            sourceType: 'url',
+            url: 'https://example.com/cat.png',
+            mediaType: null,
+            data: null
+          }
+        ],
+        {
+          targetProtocol: 'openai.chat_completions',
+          allowImageParts: false
+        }
+      )
+    ).toEqual({
+      content: [
+        { type: 'text', text: 'describe this' },
+        { type: 'text', text: '[image omitted: https://example.com/cat.png]' }
+      ],
+      reasoning: null,
+      warnings: ['image block downgraded to text note for openai.chat_completions']
+    })
+  })
 })

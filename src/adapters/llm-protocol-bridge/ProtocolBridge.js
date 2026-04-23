@@ -30,13 +30,13 @@ class ProtocolBridge {
   translateRequest({ sourceProtocol, targetProtocol, body, headers = {}, options = {} }) {
     const unified = this.protocols[sourceProtocol].decodeRequest(body, headers, options)
     const encoded = this.protocols[targetProtocol].encodeRequest(unified, headers, options)
-    return this._withMeta(encoded, sourceProtocol, targetProtocol)
+    return this._withMeta(encoded, sourceProtocol, targetProtocol, options)
   }
 
   translateResponse({ sourceProtocol, targetProtocol, body, headers = {}, options = {} }) {
     const unified = this.protocols[sourceProtocol].decodeResponse(body, headers, options)
     const encoded = this.protocols[targetProtocol].encodeResponse(unified, headers, options)
-    return this._withMeta(encoded, sourceProtocol, targetProtocol)
+    return this._withMeta(encoded, sourceProtocol, targetProtocol, options)
   }
 
   translateStreamChunk({
@@ -64,7 +64,7 @@ class ProtocolBridge {
       stateStore: this.streamStateStore
     })
     return {
-      ...this._withMeta(encoded, sourceProtocol, targetProtocol),
+      ...this._withMeta(encoded, sourceProtocol, targetProtocol, options),
       sessionId
     }
   }
@@ -72,7 +72,7 @@ class ProtocolBridge {
   translateError({ sourceProtocol, targetProtocol, error, status, headers = {}, options = {} }) {
     const unified = this.protocols[sourceProtocol].decodeError(error, { status, headers, options })
     const encoded = this.protocols[targetProtocol].encodeError(unified, { headers, options })
-    return this._withMeta(encoded, sourceProtocol, targetProtocol)
+    return this._withMeta(encoded, sourceProtocol, targetProtocol, options)
   }
 
   translateHeaders({
@@ -84,7 +84,7 @@ class ProtocolBridge {
   }) {
     const normalized = this.protocols[sourceProtocol].decodeHeaders(headers, { direction, options })
     const encoded = this.protocols[targetProtocol].encodeHeaders(normalized, { direction, options })
-    return this._withMeta({ headers: encoded, body: null }, sourceProtocol, targetProtocol)
+    return this._withMeta({ headers: encoded, body: null }, sourceProtocol, targetProtocol, options)
   }
 
   translateTokenCountRequest({ sourceProtocol, targetProtocol, body, headers = {}, options = {} }) {
@@ -96,7 +96,7 @@ class ProtocolBridge {
       headers,
       options
     })
-    return this._withMeta(encoded, sourceProtocol, targetProtocol)
+    return this._withMeta(encoded, sourceProtocol, targetProtocol, options)
   }
 
   translateTokenCountResponse({
@@ -114,7 +114,7 @@ class ProtocolBridge {
       headers,
       options
     })
-    return this._withMeta(encoded, sourceProtocol, targetProtocol)
+    return this._withMeta(encoded, sourceProtocol, targetProtocol, options)
   }
 
   resetStream(sessionId) {
@@ -129,15 +129,27 @@ class ProtocolBridge {
     return this.streamStateStore.snapshot(sessionId)
   }
 
-  _withMeta(result, sourceProtocol, targetProtocol) {
+  _withMeta(result, sourceProtocol, targetProtocol, options = {}) {
+    const meta = {
+      sourceProtocol,
+      targetProtocol,
+      degraded: result.meta?.degraded || false,
+      warnings: result.meta?.warnings || []
+    }
+
+    if (options.strict && meta.degraded) {
+      if (
+        meta.warnings.includes('image block downgraded to text note for openai.chat_completions')
+      ) {
+        throw new Error(`${targetProtocol} cannot encode image block without degradation`)
+      }
+
+      throw new Error(`${targetProtocol} cannot encode payload without degradation`)
+    }
+
     return {
       ...result,
-      meta: {
-        sourceProtocol,
-        targetProtocol,
-        degraded: result.meta?.degraded || false,
-        warnings: result.meta?.warnings || []
-      }
+      meta
     }
   }
 }

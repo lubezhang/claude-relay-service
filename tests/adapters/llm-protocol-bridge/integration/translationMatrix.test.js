@@ -64,6 +64,85 @@ describe('llm protocol bridge integration matrix', () => {
     expect(responsesToChat.body.model).toBeTruthy()
   })
 
+  test('surfaces degradation warnings when translating anthropic images to chat text-only mode', () => {
+    const result = bridge.translateRequest({
+      sourceProtocol: 'anthropic.messages',
+      targetProtocol: 'openai.chat_completions',
+      body: {
+        model: 'claude-sonnet-4-5',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'describe the image' },
+              {
+                type: 'image',
+                source: { type: 'url', url: 'https://example.com/cat.png' }
+              }
+            ]
+          }
+        ]
+      },
+      options: {
+        endpointHint: '/chat/completions',
+        allowImageParts: false
+      }
+    })
+
+    expect(result.meta.degraded).toBe(true)
+    expect(result.meta.warnings).toContain(
+      'image block downgraded to text note for openai.chat_completions'
+    )
+    expect(result.body.messages[0].content).toContain(
+      '[image omitted: https://example.com/cat.png]'
+    )
+  })
+
+  test('applies modelMapping and strips raw payloads unless includeRaw is enabled', () => {
+    const result = bridge.translateRequest({
+      sourceProtocol: 'anthropic.messages',
+      targetProtocol: 'openai.responses',
+      body: {
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }]
+      },
+      options: {
+        modelMapping: { 'claude-sonnet-4-5': 'gpt-5-mini' },
+        includeRaw: false
+      }
+    })
+
+    expect(result.body.model).toBe('gpt-5-mini')
+    expect(result.meta.degraded).toBe(false)
+  })
+
+  test('throws in strict mode when the target protocol cannot encode the block losslessly', () => {
+    expect(() =>
+      bridge.translateRequest({
+        sourceProtocol: 'anthropic.messages',
+        targetProtocol: 'openai.chat_completions',
+        body: {
+          model: 'claude-sonnet-4-5',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: { type: 'url', url: 'https://example.com/cat.png' }
+                }
+              ]
+            }
+          ]
+        },
+        options: {
+          strict: true,
+          allowImageParts: false
+        }
+      })
+    ).toThrow('openai.chat_completions cannot encode image block without degradation')
+  })
+
   test('coexists with the legacy claude-openai adapter without mutation', () => {
     const legacy = legacyAdapter.convertRequest({
       model: 'claude-sonnet-4-5',

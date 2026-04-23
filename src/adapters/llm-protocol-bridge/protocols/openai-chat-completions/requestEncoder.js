@@ -1,5 +1,8 @@
-function encodeRequest(unified) {
+const { serializeBlocks } = require('../../core/blocks/serializeBlocks')
+
+function encodeRequest(unified, _headers = {}, options = {}) {
   const messages = []
+  const warnings = []
 
   for (const systemText of unified.system || []) {
     messages.push({ role: 'system', content: systemText })
@@ -18,16 +21,14 @@ function encodeRequest(unified) {
 
     const textParts = []
     const toolCalls = []
+    const serializedBlocks = serializeBlocks(message.blocks, {
+      targetProtocol: 'openai.chat_completions',
+      allowImageParts: options.allowImageParts
+    })
+
+    warnings.push(...serializedBlocks.warnings)
+
     for (const block of message.blocks) {
-      if (block.type === 'text') {
-        textParts.push(block.text)
-      }
-      if (block.type === 'image') {
-        textParts.push({
-          type: 'image_url',
-          image_url: { url: block.url || `data:${block.mediaType};base64,${block.data}` }
-        })
-      }
       if (block.type === 'tool_call') {
         toolCalls.push({
           id: block.id,
@@ -38,6 +39,10 @@ function encodeRequest(unified) {
           }
         })
       }
+    }
+
+    for (const item of serializedBlocks.content) {
+      textParts.push(item.type === 'text' ? item.text : item)
     }
 
     const hasStructuredParts = textParts.some((part) => typeof part === 'object')
@@ -90,8 +95,8 @@ function encodeRequest(unified) {
     headers: {},
     meta: {
       targetProtocol: 'openai.chat_completions',
-      degraded: false,
-      warnings: []
+      degraded: warnings.length > 0,
+      warnings
     }
   }
 }

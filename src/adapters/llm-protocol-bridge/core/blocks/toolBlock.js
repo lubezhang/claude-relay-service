@@ -24,7 +24,28 @@ function toUnifiedToolResultBlock(block) {
   }
 }
 
+function normalizeToolChoice(toolChoice) {
+  if (!toolChoice) {
+    return null
+  }
+
+  if (toolChoice === 'none' || toolChoice === 'auto' || toolChoice === 'required') {
+    return { type: toolChoice }
+  }
+
+  if (toolChoice.type === 'function' && toolChoice.function?.name) {
+    return { type: 'tool', name: toolChoice.function.name }
+  }
+
+  if (toolChoice.type === 'tool' && toolChoice.name) {
+    return { type: 'tool', name: toolChoice.name }
+  }
+
+  return toolChoice
+}
+
 module.exports = {
+  normalizeToolChoice,
   toUnifiedToolCallBlock,
   toUnifiedToolResultBlock
 }
