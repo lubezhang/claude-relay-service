@@ -1,3 +1,26 @@
+function toResponsesToolChoice(toolChoice) {
+  if (!toolChoice) {
+    return undefined
+  }
+
+  if (toolChoice.type === 'none' || toolChoice.type === 'auto') {
+    return toolChoice.type
+  }
+
+  if (toolChoice.type === 'required') {
+    return 'required'
+  }
+
+  if (toolChoice.type === 'tool') {
+    return {
+      type: 'function',
+      name: toolChoice.name
+    }
+  }
+
+  return toolChoice
+}
+
 function encodeRequest(unified) {
   const input = unified.messages.map((message) => ({
     role: message.role,
@@ -57,6 +80,19 @@ function encodeRequest(unified) {
 
   if (Array.isArray(unified.tools) && unified.tools.length > 0) {
     body.tools = unified.tools
+  }
+
+  const toolChoice = toResponsesToolChoice(unified.toolChoice)
+  if (toolChoice !== undefined) {
+    body.tool_choice = toolChoice
+  }
+
+  if (Object.keys(unified.metadata || {}).length > 0) {
+    body.metadata = unified.metadata
+  }
+
+  if (unified.serviceTier) {
+    body.service_tier = unified.serviceTier
   }
 
   return {

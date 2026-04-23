@@ -158,4 +158,53 @@ describe('openai responses protocol adapter', () => {
     expect(encoded.body.top_p).toBe(0.7)
     expect(encoded.body.stop).toEqual(['END'])
   })
+
+  test('encodes tool choice, metadata, and service tier into responses-compatible request shape', () => {
+    const encoded = responses.encodeRequest({
+      model: 'gpt-5',
+      system: ['Be helpful'],
+      messages: [{ role: 'user', blocks: [{ type: 'text', text: 'hello' }] }],
+      tools: [{ type: 'function', name: 'lookup_weather', parameters: { type: 'object' } }],
+      toolChoice: { type: 'tool', name: 'lookup_weather' },
+      sampling: {
+        maxTokens: 100,
+        temperature: 0.2,
+        topP: 0.8,
+        stop: ['END']
+      },
+      metadata: { user_id: 'user-7' },
+      serviceTier: 'priority',
+      output: { reasoning: { effort: 'medium' }, modalities: ['text'] },
+      stream: true
+    })
+
+    expect(encoded.body.tool_choice).toEqual({ type: 'function', name: 'lookup_weather' })
+    expect(encoded.body.max_output_tokens).toBe(100)
+    expect(encoded.body.metadata).toEqual({ user_id: 'user-7' })
+    expect(encoded.body.service_tier).toBe('priority')
+  })
+
+  test('preserves tool results and output text when decoding response output items', () => {
+    const decoded = responses.decodeResponse({
+      id: 'resp-1',
+      model: 'gpt-5',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'call-1',
+          name: 'lookup_weather',
+          arguments: '{"city":"Paris"}'
+        },
+        { type: 'function_call_output', call_id: 'call-1', output: 'Sunny' },
+        { type: 'output_text', text: 'Done' }
+      ],
+      usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 }
+    })
+
+    expect(decoded.blocks).toEqual([
+      { type: 'tool_call', id: 'call-1', name: 'lookup_weather', input: { city: 'Paris' } },
+      { type: 'tool_result', toolCallId: 'call-1', content: 'Sunny', isError: false },
+      { type: 'text', text: 'Done' }
+    ])
+  })
 })

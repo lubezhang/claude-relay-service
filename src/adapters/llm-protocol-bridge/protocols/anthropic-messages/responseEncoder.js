@@ -17,6 +17,15 @@ function encodeResponse(unified) {
       }
     }
 
+    if (block.type === 'tool_result') {
+      return {
+        type: 'tool_result',
+        tool_use_id: block.toolCallId,
+        content: block.content,
+        ...(block.isError ? { is_error: true } : {})
+      }
+    }
+
     return {
       type: 'text',
       text: block.text || ''

@@ -19,6 +19,14 @@ function encodeResponse(unified) {
       })
     }
 
+    if (block.type === 'tool_result') {
+      output.push({
+        type: 'function_call_output',
+        call_id: block.toolCallId,
+        output: block.content
+      })
+    }
+
     if (block.type === 'text') {
       output.push({
         type: 'output_text',

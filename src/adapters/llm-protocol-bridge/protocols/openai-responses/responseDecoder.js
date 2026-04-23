@@ -21,6 +21,14 @@ function decodeResponse(body) {
         input: JSON.parse(item.arguments || '{}')
       })
     }
+    if (item.type === 'function_call_output') {
+      blocks.push({
+        type: 'tool_result',
+        toolCallId: item.call_id,
+        content: item.output,
+        isError: false
+      })
+    }
     if (item.type === 'output_text') {
       blocks.push({ type: 'text', text: item.text })
     }

@@ -1,5 +1,32 @@
 const { serializeBlocks } = require('../../core/blocks/serializeBlocks')
 
+function toChatToolChoice(toolChoice) {
+  if (!toolChoice) {
+    return undefined
+  }
+
+  if (toolChoice.type === 'none') {
+    return 'none'
+  }
+
+  if (toolChoice.type === 'auto') {
+    return 'auto'
+  }
+
+  if (toolChoice.type === 'required') {
+    return 'required'
+  }
+
+  if (toolChoice.type === 'tool') {
+    return {
+      type: 'function',
+      function: { name: toolChoice.name }
+    }
+  }
+
+  return toolChoice
+}
+
 function encodeRequest(unified, _headers = {}, options = {}) {
   const messages = []
   const warnings = []
@@ -86,8 +113,13 @@ function encodeRequest(unified, _headers = {}, options = {}) {
     body.tools = unified.tools
   }
 
-  if (unified.toolChoice !== null && unified.toolChoice !== undefined) {
-    body.tool_choice = unified.toolChoice
+  if (unified.metadata?.user_id) {
+    body.user = unified.metadata.user_id
+  }
+
+  const toolChoice = toChatToolChoice(unified.toolChoice)
+  if (toolChoice !== undefined) {
+    body.tool_choice = toolChoice
   }
 
   return {

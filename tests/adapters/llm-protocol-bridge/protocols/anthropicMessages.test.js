@@ -67,7 +67,8 @@ describe('anthropic protocol adapter', () => {
       blocks: [
         { type: 'reasoning', text: 'step 1', signature: 'sig-2' },
         { type: 'text', text: 'answer' },
-        { type: 'tool_call', id: 'call-9', name: 'lookup_weather', input: { city: 'Paris' } }
+        { type: 'tool_call', id: 'call-9', name: 'lookup_weather', input: { city: 'Paris' } },
+        { type: 'tool_result', toolCallId: 'call-9', content: 'Sunny', isError: false }
       ],
       stop: { reason: 'tool_use', sequence: null },
       usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 2 }
@@ -86,7 +87,8 @@ describe('anthropic protocol adapter', () => {
     expect(encodedResponse.body.content).toEqual([
       { type: 'thinking', thinking: 'step 1', signature: 'sig-2' },
       { type: 'text', text: 'answer' },
-      { type: 'tool_use', id: 'call-9', name: 'lookup_weather', input: { city: 'Paris' } }
+      { type: 'tool_use', id: 'call-9', name: 'lookup_weather', input: { city: 'Paris' } },
+      { type: 'tool_result', tool_use_id: 'call-9', content: 'Sunny' }
     ])
 
     const encodedChunk = anthropic.encodeStream([

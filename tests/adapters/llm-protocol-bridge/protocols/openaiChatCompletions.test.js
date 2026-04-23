@@ -143,4 +143,26 @@ describe('openai chat completions protocol adapter', () => {
 
     expect(encoded.body.stream_options).toEqual({ include_usage: true })
   })
+
+  test('maps normalized tool choice and request metadata into chat-completions shape', () => {
+    const encoded = chat.encodeRequest({
+      model: 'gpt-5',
+      system: ['Be concise'],
+      messages: [{ role: 'user', blocks: [{ type: 'text', text: 'hello' }] }],
+      tools: [
+        { type: 'function', function: { name: 'lookup_weather', parameters: { type: 'object' } } }
+      ],
+      toolChoice: { type: 'tool', name: 'lookup_weather' },
+      metadata: { user_id: 'user-9' },
+      sampling: { maxTokens: 12, temperature: 0.1, topP: 0.7, stop: ['END'] },
+      stream: true
+    })
+
+    expect(encoded.body.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'lookup_weather' }
+    })
+    expect(encoded.body.user).toBe('user-9')
+    expect(encoded.body.max_tokens).toBe(12)
+  })
 })
