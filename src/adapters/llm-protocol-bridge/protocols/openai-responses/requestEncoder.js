@@ -30,16 +30,37 @@ function encodeRequest(unified) {
     })
   }))
 
+  const body = {
+    model: unified.model,
+    instructions: unified.system.join('\n\n') || undefined,
+    input,
+    reasoning: unified.output.reasoning || undefined,
+    modalities: unified.output.modalities || undefined,
+    stream: unified.stream
+  }
+
+  if (unified.sampling?.maxTokens !== undefined) {
+    body.max_output_tokens = unified.sampling.maxTokens
+  }
+
+  if (unified.sampling?.temperature !== undefined) {
+    body.temperature = unified.sampling.temperature
+  }
+
+  if (unified.sampling?.topP !== undefined) {
+    body.top_p = unified.sampling.topP
+  }
+
+  if (unified.sampling?.stop !== undefined) {
+    body.stop = unified.sampling.stop
+  }
+
+  if (Array.isArray(unified.tools) && unified.tools.length > 0) {
+    body.tools = unified.tools
+  }
+
   return {
-    body: {
-      model: unified.model,
-      instructions: unified.system.join('\n\n') || undefined,
-      input,
-      tools: unified.tools,
-      reasoning: unified.output.reasoning || undefined,
-      modalities: unified.output.modalities || undefined,
-      stream: unified.stream
-    },
+    body,
     headers: {},
     meta: {
       targetProtocol: 'openai.responses',

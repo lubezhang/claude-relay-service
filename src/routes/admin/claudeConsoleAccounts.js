@@ -133,7 +133,8 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       quotaResetTime,
       maxConcurrentTasks,
       disableAutoProtection,
-      interceptWarmup
+      interceptWarmup,
+      enableOpenAIProtocolBridge
     } = req.body
 
     if (!name || !apiUrl || !apiKey) {
@@ -156,6 +157,8 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
     // 校验上游错误自动防护开关
     const normalizedDisableAutoProtection =
       disableAutoProtection === true || disableAutoProtection === 'true'
+    const normalizedEnableOpenAIProtocolBridge =
+      enableOpenAIProtocolBridge === true || enableOpenAIProtocolBridge === 'true'
 
     // 验证accountType的有效性
     if (accountType && !['shared', 'dedicated', 'group'].includes(accountType)) {
@@ -188,7 +191,8 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
           ? Number(maxConcurrentTasks)
           : 0,
       disableAutoProtection: normalizedDisableAutoProtection,
-      interceptWarmup: interceptWarmup === true || interceptWarmup === 'true'
+      interceptWarmup: interceptWarmup === true || interceptWarmup === 'true',
+      enableOpenAIProtocolBridge: normalizedEnableOpenAIProtocolBridge
     })
 
     // 如果是分组类型，将账户添加到分组（CCR 归属 Claude 平台分组）
@@ -263,6 +267,11 @@ router.put('/claude-console-accounts/:accountId', authenticateAdmin, async (req,
       mappedUpdates.disableAutoProtection =
         mappedUpdates.disableAutoProtection === true ||
         mappedUpdates.disableAutoProtection === 'true'
+    }
+    if (mappedUpdates.enableOpenAIProtocolBridge !== undefined) {
+      mappedUpdates.enableOpenAIProtocolBridge =
+        mappedUpdates.enableOpenAIProtocolBridge === true ||
+        mappedUpdates.enableOpenAIProtocolBridge === 'true'
     }
 
     // 处理分组的变更

@@ -6,6 +6,29 @@ const {
   createMessageStopEvent
 } = require('./eventFactory')
 const { closeBlock, openBlock } = require('./streamSession')
+const { normalizeUsage } = require('../usageNormalizer')
+
+function normalizeBlock(block = {}) {
+  if (block.type === 'tool_use') {
+    return {
+      ...block,
+      type: 'tool_call'
+    }
+  }
+
+  return block
+}
+
+function normalizeStopReason(reason, state) {
+  if (!reason || reason === 'end_turn') {
+    if (state.currentBlockType === 'tool_call') {
+      return 'tool_use'
+    }
+    return 'end_turn'
+  }
+
+  return reason
+}
 
 function normalizeStreamEvents(events = [], { sessionId, stateStore }) {
   const state = stateStore.getOrCreate(sessionId)
@@ -18,26 +41,64 @@ function normalizeStreamEvents(events = [], { sessionId, stateStore }) {
       continue
     }
 
+    if (event.type === 'block_start') {
+      const normalizedBlock = normalizeBlock(event.block)
+
+      if (state.currentBlockType) {
+        normalized.push(createBlockStopEvent(closeBlock(state)))
+      }
+
+      const nextIndex = openBlock(state, normalizedBlock)
+      normalized.push(createBlockStartEvent(nextIndex, normalizedBlock))
+      continue
+    }
+
     if (event.type === 'block_delta') {
-      if (state.currentBlockType && state.currentBlockType !== event.block.type) {
+      const normalizedBlock = normalizeBlock(event.block)
+
+      if (state.currentBlockType && state.currentBlockType !== normalizedBlock.type) {
         normalized.push(createBlockStopEvent(closeBlock(state)))
       }
 
       if (!state.currentBlockType) {
-        const nextIndex = openBlock(state, event.block.type)
-        normalized.push(createBlockStartEvent(nextIndex, { type: event.block.type }))
+        const nextIndex = openBlock(state, normalizedBlock)
+        normalized.push(createBlockStartEvent(nextIndex, normalizedBlock))
       }
 
-      normalized.push(createBlockDeltaEvent(state.currentBlockIndex, event.block))
+      normalized.push(createBlockDeltaEvent(state.currentBlockIndex, normalizedBlock))
+      continue
+    }
+
+    if (event.type === 'message_delta') {
+      state.pendingMessageDelta = event.delta || {}
+      state.pendingUsage = event.usage ? normalizeUsage(event.usage) : state.pendingUsage
+      state.sawMessageDelta = true
+      normalized.push(createMessageDeltaEvent(event.delta || {}, state.pendingUsage))
       continue
     }
 
     if (event.type === 'message_stop') {
-      normalized.push(createMessageDeltaEvent(event.stop || {}, event.usage || null))
+      const usage = event.usage ? normalizeUsage(event.usage) : state.pendingUsage
+      const reason = normalizeStopReason(
+        event.stop?.reason || event.stop?.stop_reason || state.pendingMessageDelta?.reason || state.pendingMessageDelta?.stop_reason,
+        state
+      )
+
+      if (!state.sawMessageDelta) {
+        normalized.push(
+          createMessageDeltaEvent(
+            {
+              stop_reason: reason
+            },
+            usage
+          )
+        )
+      }
+
       if (state.currentBlockType) {
         normalized.push(createBlockStopEvent(closeBlock(state)))
       }
-      normalized.push(createMessageStopEvent(event.stop || { reason: 'end_turn' }))
+      normalized.push(createMessageStopEvent({ reason }, usage))
       stateStore.reset(sessionId)
     }
   }

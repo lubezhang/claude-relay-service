@@ -51,6 +51,10 @@ class ClaudeConsoleAccountService {
     return parsed
   }
 
+  getClaudeCodeBridgeBasePath(accountId) {
+    return `/api/console/${accountId}`
+  }
+
   // 🏢 创建Claude Console账户
   async createAccount(options = {}) {
     const {
@@ -70,7 +74,8 @@ class ClaudeConsoleAccountService {
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
       maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
       disableAutoProtection = false, // 是否关闭自动防护（429/401/400/529 不自动禁用）
-      interceptWarmup = false // 拦截预热请求（标题生成、Warmup等）
+      interceptWarmup = false, // 拦截预热请求（标题生成、Warmup等）
+      enableOpenAIProtocolBridge = false // 启用 OpenAI 协议桥接（Claude Code <-> OpenAI）
     } = options
 
     // 验证必填字段
@@ -120,7 +125,8 @@ class ClaudeConsoleAccountService {
       quotaStoppedAt: '', // 因额度停用的时间
       maxConcurrentTasks: maxConcurrentTasks.toString(), // 最大并发任务数，0表示无限制
       disableAutoProtection: disableAutoProtection.toString(), // 关闭自动防护
-      interceptWarmup: interceptWarmup.toString() // 拦截预热请求
+      interceptWarmup: interceptWarmup.toString(), // 拦截预热请求
+      enableOpenAIProtocolBridge: enableOpenAIProtocolBridge.toString() // OpenAI 协议桥接
     }
 
     const client = redis.getClientSafe()
@@ -161,6 +167,8 @@ class ClaudeConsoleAccountService {
       maxConcurrentTasks, // 新增：返回并发限制配置
       disableAutoProtection, // 新增：返回自动防护开关
       interceptWarmup, // 新增：返回预热请求拦截开关
+      enableOpenAIProtocolBridge, // 新增：OpenAI 协议桥接开关
+      claudeCodeBridgeBasePath: this.getClaudeCodeBridgeBasePath(accountId),
       activeTaskCount: 0 // 新增：新建账户当前并发数为0
     }
   }
@@ -231,7 +239,10 @@ class ClaudeConsoleAccountService {
             activeTaskCount,
             disableAutoProtection: accountData.disableAutoProtection === 'true',
             // 拦截预热请求
-            interceptWarmup: accountData.interceptWarmup === 'true'
+            interceptWarmup: accountData.interceptWarmup === 'true',
+            // OpenAI 协议桥接
+            enableOpenAIProtocolBridge: accountData.enableOpenAIProtocolBridge === 'true',
+            claudeCodeBridgeBasePath: this.getClaudeCodeBridgeBasePath(accountData.id)
           })
         }
       }
@@ -278,6 +289,7 @@ class ClaudeConsoleAccountService {
     accountData.isActive = accountData.isActive === 'true'
     accountData.schedulable = accountData.schedulable !== 'false' // 默认为true
     accountData.disableAutoProtection = accountData.disableAutoProtection === 'true'
+    accountData.enableOpenAIProtocolBridge = accountData.enableOpenAIProtocolBridge === 'true'
 
     if (accountData.proxy) {
       accountData.proxy = JSON.parse(accountData.proxy)
@@ -287,6 +299,7 @@ class ClaudeConsoleAccountService {
     accountData.maxConcurrentTasks = parseInt(accountData.maxConcurrentTasks) || 0
     // 获取实时并发计数
     accountData.activeTaskCount = await redis.getConsoleAccountConcurrency(accountId)
+    accountData.claudeCodeBridgeBasePath = this.getClaudeCodeBridgeBasePath(accountId)
 
     logger.debug(
       `[DEBUG] Final account data - name: ${accountData.name}, hasApiUrl: ${!!accountData.apiUrl}, hasApiKey: ${!!accountData.apiKey}, supportedModels: ${JSON.stringify(accountData.supportedModels)}`
@@ -391,6 +404,9 @@ class ClaudeConsoleAccountService {
       }
       if (updates.interceptWarmup !== undefined) {
         updatedData.interceptWarmup = updates.interceptWarmup.toString()
+      }
+      if (updates.enableOpenAIProtocolBridge !== undefined) {
+        updatedData.enableOpenAIProtocolBridge = updates.enableOpenAIProtocolBridge.toString()
       }
 
       // ✅ 直接保存 subscriptionExpiresAt（如果提供）

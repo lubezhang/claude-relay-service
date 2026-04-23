@@ -13,10 +13,68 @@ const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const userMessageQueueService = require('../userMessageQueueService')
 const { isStreamWritable } = require('../../utils/streamHelper')
 const { filterForClaude } = require('../../utils/headerFilter')
+const protocolBridge = require('../../adapters/llm-protocol-bridge')
 
 class ClaudeConsoleRelayService {
   constructor() {
     this.defaultUserAgent = 'claude-cli/2.0.52 (external, cli)'
+  }
+
+  _isOpenAIProtocolBridgeEnabled(account) {
+    return (
+      account?.enableOpenAIProtocolBridge === true || account?.enableOpenAIProtocolBridge === 'true'
+    )
+  }
+
+  _detectOpenAITargetProtocol(urlOrPath = '') {
+    const lower = String(urlOrPath || '').toLowerCase()
+    if (lower.includes('/responses')) {
+      return 'openai.responses'
+    }
+    return 'openai.chat_completions'
+  }
+
+  _createBridgeContext(account, urlOrPath = '') {
+    if (!this._isOpenAIProtocolBridgeEnabled(account)) {
+      return null
+    }
+
+    return {
+      sourceProtocol: 'anthropic.messages',
+      targetProtocol: this._detectOpenAITargetProtocol(urlOrPath)
+    }
+  }
+
+  _buildApiEndpoint(apiUrl, options = {}, bridgeContext = null) {
+    const cleanUrl = (apiUrl || '').replace(/\/$/, '')
+
+    if (options.customPath) {
+      if (bridgeContext) {
+        const baseUrl = cleanUrl.replace(/\/v1\/(chat\/completions|responses)$/, '')
+        if (/\/v1$/.test(baseUrl) && options.customPath.startsWith('/v1/')) {
+          return `${baseUrl}${options.customPath.slice(3)}`
+        }
+        return `${baseUrl}${options.customPath}`
+      }
+      const baseUrl = cleanUrl.replace(/\/v1\/messages$/, '')
+      return `${baseUrl}${options.customPath}`
+    }
+
+    if (bridgeContext) {
+      if (/\/v1\/(chat\/completions|responses)$/.test(cleanUrl)) {
+        return cleanUrl
+      }
+      if (/\/v1$/.test(cleanUrl)) {
+        return bridgeContext.targetProtocol === 'openai.responses'
+          ? `${cleanUrl}/responses`
+          : `${cleanUrl}/chat/completions`
+      }
+      return bridgeContext.targetProtocol === 'openai.responses'
+        ? `${cleanUrl}/v1/responses`
+        : `${cleanUrl}/v1/chat/completions`
+    }
+
+    return cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
   }
 
   // 🚀 转发请求到Claude Console API
@@ -187,18 +245,9 @@ class ClaudeConsoleRelayService {
         clientResponse.once('close', handleClientDisconnect)
       }
 
-      // 构建完整的API URL
-      const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
-      let apiEndpoint
-
-      if (options.customPath) {
-        // 如果指定了自定义路径（如 count_tokens），使用它
-        const baseUrl = cleanUrl.replace(/\/v1\/messages$/, '') // 移除已有的 /v1/messages
-        apiEndpoint = `${baseUrl}${options.customPath}`
-      } else {
-        // 默认使用 messages 端点
-        apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
-      }
+      // 构建完整的 API URL（支持 OpenAI 协议桥接）
+      const bridgeContext = this._createBridgeContext(account, account.apiUrl)
+      const apiEndpoint = this._buildApiEndpoint(account.apiUrl, options, bridgeContext)
 
       logger.debug(`🎯 Final API endpoint: ${apiEndpoint}`)
       logger.debug(`[DEBUG] Options passed to relayRequest: ${JSON.stringify(options)}`)
@@ -215,17 +264,21 @@ class ClaudeConsoleRelayService {
         clientHeaders?.['User-Agent'] ||
         this.defaultUserAgent
 
+      const baseHeaders = {
+        'Content-Type': 'application/json',
+        'User-Agent': userAgent,
+        ...filteredHeaders
+      }
+      if (!bridgeContext) {
+        baseHeaders['anthropic-version'] = '2023-06-01'
+      }
+
       // 准备请求配置
       const requestConfig = {
         method: 'POST',
         url: apiEndpoint,
         data: modifiedRequestBody,
-        headers: {
-          'Content-Type': 'application/json',
-          'anthropic-version': '2023-06-01',
-          'User-Agent': userAgent,
-          ...filteredHeaders
-        },
+        headers: baseHeaders,
         timeout: config.requestTimeout || 600000,
         signal: abortController.signal,
         validateStatus: () => true // 接受所有状态码
@@ -252,12 +305,29 @@ class ClaudeConsoleRelayService {
         `[DEBUG] Initial headers before beta: ${JSON.stringify(requestConfig.headers, null, 2)}`
       )
 
-      // 添加beta header如果需要
-      if (options.betaHeader) {
-        logger.debug(`[DEBUG] Adding beta header: ${options.betaHeader}`)
-        requestConfig.headers['anthropic-beta'] = options.betaHeader
+      if (bridgeContext) {
+        const translatedRequest = protocolBridge.translateRequest({
+          sourceProtocol: bridgeContext.sourceProtocol,
+          targetProtocol: bridgeContext.targetProtocol,
+          body: modifiedRequestBody,
+          headers: requestConfig.headers
+        })
+
+        requestConfig.data = translatedRequest.body
+        delete requestConfig.headers['anthropic-version']
+        delete requestConfig.headers['anthropic-beta']
+
+        logger.info(
+          `🔁 OpenAI protocol bridge enabled for console account ${account.name} (${accountId}): anthropic.messages -> ${bridgeContext.targetProtocol}`
+        )
       } else {
-        logger.debug('[DEBUG] No beta header to add')
+        // 添加beta header如果需要
+        if (options.betaHeader) {
+          logger.debug(`[DEBUG] Adding beta header: ${options.betaHeader}`)
+          requestConfig.headers['anthropic-beta'] = options.betaHeader
+        } else {
+          logger.debug('[DEBUG] No beta header to add')
+        }
       }
 
       // 发送请求
@@ -405,32 +475,70 @@ class ClaudeConsoleRelayService {
 
       // 准备响应体并清理错误信息（如果是错误响应）
       let responseBody
-      if (response.status < 200 || response.status >= 300) {
-        // 错误响应，清理供应商信息
+      let responseHeaders = response.headers || {}
+
+      if (bridgeContext) {
         try {
-          const responseData =
-            typeof response.data === 'string' ? JSON.parse(response.data) : response.data
-          const sanitizedData = sanitizeUpstreamError(responseData)
-          responseBody = JSON.stringify(sanitizedData)
-          logger.debug(`🧹 Sanitized error response`)
-        } catch (parseError) {
-          // 如果无法解析为JSON，尝试清理文本
-          const rawText =
-            typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
-          responseBody = sanitizeErrorMessage(rawText)
-          logger.debug(`🧹 Sanitized error text`)
+          if (response.status < 200 || response.status >= 300) {
+            const errorBody =
+              typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+            const translatedError = protocolBridge.translateError({
+              sourceProtocol: bridgeContext.targetProtocol,
+              targetProtocol: bridgeContext.sourceProtocol,
+              error: errorBody,
+              status: response.status
+            })
+            responseBody = JSON.stringify(translatedError.body)
+          } else {
+            const upstreamBody =
+              typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+            const translatedResponse = protocolBridge.translateResponse({
+              sourceProtocol: bridgeContext.targetProtocol,
+              targetProtocol: bridgeContext.sourceProtocol,
+              body: upstreamBody
+            })
+            responseBody = JSON.stringify(translatedResponse.body)
+          }
+
+          responseHeaders = {
+            ...responseHeaders,
+            'content-type': 'application/json'
+          }
+        } catch (bridgeError) {
+          logger.warn(
+            `⚠️ Failed to translate console response via protocol bridge (${bridgeContext.targetProtocol} -> anthropic.messages): ${bridgeError.message}`
+          )
         }
-      } else {
-        // 成功响应，不需要清理
-        responseBody =
-          typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
+      }
+
+      if (responseBody === undefined) {
+        if (response.status < 200 || response.status >= 300) {
+          // 错误响应，清理供应商信息
+          try {
+            const responseData =
+              typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+            const sanitizedData = sanitizeUpstreamError(responseData)
+            responseBody = JSON.stringify(sanitizedData)
+            logger.debug(`🧹 Sanitized error response`)
+          } catch (parseError) {
+            // 如果无法解析为JSON，尝试清理文本
+            const rawText =
+              typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
+            responseBody = sanitizeErrorMessage(rawText)
+            logger.debug(`🧹 Sanitized error text`)
+          }
+        } else {
+          // 成功响应，不需要清理
+          responseBody =
+            typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
+        }
       }
 
       logger.debug(`[DEBUG] Final response body to return: ${responseBody.substring(0, 200)}...`)
 
       return {
         statusCode: response.status,
-        headers: response.headers,
+        headers: responseHeaders,
         body: responseBody,
         accountId
       }
@@ -755,10 +863,12 @@ class ClaudeConsoleRelayService {
   ) {
     return new Promise((resolve, reject) => {
       let aborted = false
+      const bridgeContext = this._createBridgeContext(account, account.apiUrl)
+      const bridgeSessionId = bridgeContext ? `console-stream-${accountId}-${uuidv4()}` : null
+      let bridgeInputBuffer = ''
 
-      // 构建完整的API URL
-      const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
-      const apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
+      // 构建完整的 API URL（支持 OpenAI 协议桥接）
+      const apiEndpoint = this._buildApiEndpoint(account.apiUrl, requestOptions, bridgeContext)
 
       logger.debug(`🎯 Final API endpoint for stream: ${apiEndpoint}`)
 
@@ -773,17 +883,21 @@ class ClaudeConsoleRelayService {
         clientHeaders?.['User-Agent'] ||
         this.defaultUserAgent
 
+      const baseHeaders = {
+        'Content-Type': 'application/json',
+        'User-Agent': userAgent,
+        ...filteredHeaders
+      }
+      if (!bridgeContext) {
+        baseHeaders['anthropic-version'] = '2023-06-01'
+      }
+
       // 准备请求配置
       const requestConfig = {
         method: 'POST',
         url: apiEndpoint,
         data: body,
-        headers: {
-          'Content-Type': 'application/json',
-          'anthropic-version': '2023-06-01',
-          'User-Agent': userAgent,
-          ...filteredHeaders
-        },
+        headers: baseHeaders,
         timeout: config.requestTimeout || 600000,
         responseType: 'stream',
         validateStatus: () => true // 接受所有状态码
@@ -806,8 +920,18 @@ class ClaudeConsoleRelayService {
         logger.debug('[DEBUG] Using Authorization Bearer authentication')
       }
 
-      // 添加beta header如果需要
-      if (requestOptions.betaHeader) {
+      if (bridgeContext) {
+        const translatedRequest = protocolBridge.translateRequest({
+          sourceProtocol: bridgeContext.sourceProtocol,
+          targetProtocol: bridgeContext.targetProtocol,
+          body,
+          headers: requestConfig.headers
+        })
+        requestConfig.data = translatedRequest.body
+        delete requestConfig.headers['anthropic-version']
+        delete requestConfig.headers['anthropic-beta']
+      } else if (requestOptions.betaHeader) {
+        // 添加beta header如果需要
         requestConfig.headers['anthropic-beta'] = requestOptions.betaHeader
       }
 
@@ -921,16 +1045,30 @@ class ClaudeConsoleRelayService {
               try {
                 const fullErrorData = Buffer.concat(errorChunks).toString()
                 const errorJson = JSON.parse(fullErrorData)
-                const sanitizedError = sanitizeUpstreamError(errorJson)
 
-                // 记录清理后的错误消息（发送给客户端的，完整记录）
-                logger.error(
-                  `🧹 [Stream] [SANITIZED] Error response to client: ${JSON.stringify(sanitizedError)}`
-                )
+                if (bridgeContext) {
+                  const translatedError = protocolBridge.translateError({
+                    sourceProtocol: bridgeContext.targetProtocol,
+                    targetProtocol: bridgeContext.sourceProtocol,
+                    error: errorJson,
+                    status: response.status
+                  })
+                  if (isStreamWritable(responseStream)) {
+                    responseStream.write(JSON.stringify(translatedError.body))
+                    responseStream.end()
+                  }
+                } else {
+                  const sanitizedError = sanitizeUpstreamError(errorJson)
 
-                if (isStreamWritable(responseStream)) {
-                  responseStream.write(JSON.stringify(sanitizedError))
-                  responseStream.end()
+                  // 记录清理后的错误消息（发送给客户端的，完整记录）
+                  logger.error(
+                    `🧹 [Stream] [SANITIZED] Error response to client: ${JSON.stringify(sanitizedError)}`
+                  )
+
+                  if (isStreamWritable(responseStream)) {
+                    responseStream.write(JSON.stringify(sanitizedError))
+                    responseStream.end()
+                  }
                 }
               } catch (parseError) {
                 const sanitizedText = sanitizeErrorMessage(errorDataForCheck)
@@ -940,6 +1078,9 @@ class ClaudeConsoleRelayService {
                   responseStream.write(sanitizedText)
                   responseStream.end()
                 }
+              }
+              if (bridgeSessionId) {
+                protocolBridge.resetStream(bridgeSessionId)
               }
               resolve() // 不抛出异常，正常完成流处理
             })
@@ -1006,7 +1147,40 @@ class ClaudeConsoleRelayService {
                 return
               }
 
-              const chunkStr = chunk.toString()
+              let chunkStr = chunk.toString()
+
+              if (bridgeContext) {
+                bridgeInputBuffer += chunkStr
+                const bridgeLines = bridgeInputBuffer.split('\n')
+                bridgeInputBuffer = bridgeLines.pop() || ''
+                const completeBridgeChunk =
+                  bridgeLines.length > 0 ? `${bridgeLines.join('\n')}\n` : ''
+
+                if (!completeBridgeChunk) {
+                  return
+                }
+
+                let translatedChunk = null
+                try {
+                  translatedChunk = protocolBridge.translateStreamChunk({
+                    sourceProtocol: bridgeContext.targetProtocol,
+                    targetProtocol: bridgeContext.sourceProtocol,
+                    chunk: completeBridgeChunk,
+                    sessionId: bridgeSessionId
+                  })
+                } catch (translateError) {
+                  logger.debug(
+                    `⚠️ Skip non-translatable upstream stream chunk for account ${accountId}: ${translateError.message}`
+                  )
+                  return
+                }
+                chunkStr = translatedChunk?.chunk || ''
+
+                if (!chunkStr) {
+                  return
+                }
+              }
+
               buffer += chunkStr
 
               // 处理完整的SSE行
@@ -1170,6 +1344,29 @@ class ClaudeConsoleRelayService {
 
           response.data.on('end', () => {
             try {
+              if (bridgeContext && bridgeInputBuffer.trim()) {
+                try {
+                  const translatedTailChunk = protocolBridge.translateStreamChunk({
+                    sourceProtocol: bridgeContext.targetProtocol,
+                    targetProtocol: bridgeContext.sourceProtocol,
+                    chunk: `${bridgeInputBuffer}\n`,
+                    sessionId: bridgeSessionId
+                  })
+                  if (translatedTailChunk?.chunk) {
+                    buffer += translatedTailChunk.chunk
+                  }
+                } catch (tailTranslateError) {
+                  logger.debug(
+                    `⚠️ Skip non-translatable stream tail for account ${accountId}: ${tailTranslateError.message}`
+                  )
+                }
+                bridgeInputBuffer = ''
+              }
+
+              if (bridgeSessionId) {
+                protocolBridge.resetStream(bridgeSessionId)
+              }
+
               // 处理缓冲区中剩余的数据
               if (buffer.trim() && isStreamWritable(responseStream)) {
                 if (streamTransformer) {
@@ -1254,6 +1451,9 @@ class ClaudeConsoleRelayService {
           })
 
           response.data.on('error', (error) => {
+            if (bridgeSessionId) {
+              protocolBridge.resetStream(bridgeSessionId)
+            }
             logger.error(
               `❌ Claude Console stream error (Account: ${account?.name || accountId}):`,
               error
@@ -1282,6 +1482,10 @@ class ClaudeConsoleRelayService {
         .catch((error) => {
           if (aborted) {
             return
+          }
+
+          if (bridgeSessionId) {
+            protocolBridge.resetStream(bridgeSessionId)
           }
 
           logger.error(
@@ -1363,6 +1567,9 @@ class ClaudeConsoleRelayService {
       responseStream.on('close', () => {
         logger.debug('🔌 Client disconnected, cleaning up Claude Console stream')
         aborted = true
+        if (bridgeSessionId) {
+          protocolBridge.resetStream(bridgeSessionId)
+        }
       })
     })
   }

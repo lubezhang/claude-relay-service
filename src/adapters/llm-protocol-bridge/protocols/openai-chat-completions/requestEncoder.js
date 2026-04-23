@@ -49,14 +49,38 @@ function encodeRequest(unified) {
     })
   }
 
+  const body = {
+    model: unified.model,
+    messages,
+    stream: unified.stream
+  }
+
+  if (unified.sampling?.maxTokens !== undefined) {
+    body.max_tokens = unified.sampling.maxTokens
+  }
+
+  if (unified.sampling?.temperature !== undefined) {
+    body.temperature = unified.sampling.temperature
+  }
+
+  if (unified.sampling?.topP !== undefined) {
+    body.top_p = unified.sampling.topP
+  }
+
+  if (unified.sampling?.stop !== undefined) {
+    body.stop = unified.sampling.stop
+  }
+
+  if (Array.isArray(unified.tools) && unified.tools.length > 0) {
+    body.tools = unified.tools
+  }
+
+  if (unified.toolChoice !== null && unified.toolChoice !== undefined) {
+    body.tool_choice = unified.toolChoice
+  }
+
   return {
-    body: {
-      model: unified.model,
-      messages,
-      tools: unified.tools,
-      tool_choice: unified.toolChoice,
-      stream: unified.stream
-    },
+    body,
     headers: {},
     meta: {
       targetProtocol: 'openai.chat_completions',

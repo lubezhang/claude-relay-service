@@ -18,8 +18,8 @@ function createMessageDeltaEvent(delta, usage) {
   return { type: 'message_delta', delta, usage }
 }
 
-function createMessageStopEvent(stop) {
-  return { type: 'message_stop', stop }
+function createMessageStopEvent(stop, usage = null) {
+  return { type: 'message_stop', stop, usage }
 }
 
 module.exports = {

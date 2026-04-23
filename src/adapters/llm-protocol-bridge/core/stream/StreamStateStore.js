@@ -3,8 +3,12 @@ function createDefaultState() {
     started: false,
     currentBlockIndex: -1,
     currentBlockType: null,
+    currentBlock: null,
     openToolCalls: {},
-    messageStopped: false
+    messageStopped: false,
+    pendingMessageDelta: null,
+    pendingUsage: null,
+    sawMessageDelta: false
   }
 }
 

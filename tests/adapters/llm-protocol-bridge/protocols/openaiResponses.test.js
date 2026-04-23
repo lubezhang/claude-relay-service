@@ -95,4 +95,67 @@ describe('openai responses protocol adapter', () => {
     expect(encodedChunk.chunk).toContain('response.output_text.delta')
     expect(encodedChunk.chunk).toContain('response.completed')
   })
+
+  test('decodes tool-call-only responses as tool_use turns', () => {
+    const decoded = responses.decodeResponse({
+      id: 'resp-tool',
+      model: 'gpt-5',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'call-7',
+          name: 'lookup_weather',
+          arguments: '{"city":"Paris"}'
+        }
+      ],
+      usage: {
+        input_tokens: 10,
+        output_tokens: 2,
+        total_tokens: 12
+      }
+    })
+
+    expect(decoded.blocks[0]).toEqual(
+      expect.objectContaining({ type: 'tool_call', id: 'call-7', name: 'lookup_weather' })
+    )
+    expect(decoded.stop.reason).toBe('tool_use')
+    expect(decoded.usage).toEqual(expect.objectContaining({ inputTokens: 10, outputTokens: 2 }))
+  })
+
+  test('omits empty tool fields when encoding responses requests without tools', () => {
+    const encoded = responses.encodeRequest({
+      model: 'gpt-5',
+      system: ['Be helpful'],
+      messages: [{ role: 'user', blocks: [{ type: 'text', text: 'hello' }] }],
+      tools: [],
+      toolChoice: null,
+      output: {},
+      stream: true
+    })
+
+    expect(encoded.body).not.toHaveProperty('tools')
+  })
+
+  test('encodes sampling fields for responses requests', () => {
+    const encoded = responses.encodeRequest({
+      model: 'gpt-5',
+      system: ['Be helpful'],
+      messages: [{ role: 'user', blocks: [{ type: 'text', text: 'hello' }] }],
+      tools: [],
+      toolChoice: null,
+      sampling: {
+        maxTokens: 512,
+        temperature: 0.3,
+        topP: 0.7,
+        stop: ['END']
+      },
+      output: {},
+      stream: true
+    })
+
+    expect(encoded.body.max_output_tokens).toBe(512)
+    expect(encoded.body.temperature).toBe(0.3)
+    expect(encoded.body.top_p).toBe(0.7)
+    expect(encoded.body.stop).toEqual(['END'])
+  })
 })

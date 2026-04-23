@@ -26,14 +26,15 @@ function decodeStream(chunk) {
       events.push({ type: 'block_delta', block: { type: 'text', text: delta.content } })
     }
     for (const toolCall of delta.tool_calls || []) {
-      if (toolCall.id) {
+      const partialJson = toolCall.function?.arguments || ''
+      if (toolCall.id || toolCall.function?.name || partialJson) {
         events.push({
           type: 'block_delta',
           block: {
             type: 'tool_call',
             id: toolCall.id,
             name: toolCall.function?.name,
-            partialJson: toolCall.function?.arguments || ''
+            partialJson
           }
         })
       }

@@ -1878,6 +1878,26 @@
               </label>
             </div>
 
+            <!-- Claude Console OpenAI 协议桥接开关 -->
+            <div v-if="form.platform === 'claude-console'" class="mt-4">
+              <label class="flex items-start">
+                <input
+                  v-model="form.enableOpenAIProtocolBridge"
+                  class="mt-1 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                  type="checkbox"
+                />
+                <div class="ml-3">
+                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    OpenAI 协议桥接（Claude Code）
+                  </span>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    启用后会创建符合 Claude Code 规范的访问路径，将该路径上的请求转发到这里配置的
+                    OpenAI API URL，并通过 llm-protocol-bridge 适配所需的数据结构
+                  </p>
+                </div>
+              </label>
+            </div>
+
             <!-- Claude User-Agent 版本配置 -->
             <div v-if="form.platform === 'claude'" class="mt-4">
               <label class="flex items-start">
@@ -2896,6 +2916,26 @@
                 </span>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   启用后，对标题生成、Warmup 等低价值请求直接返回模拟响应，不消耗上游 API 额度
+                </p>
+              </div>
+            </label>
+          </div>
+
+          <!-- Claude Console OpenAI 协议桥接开关（编辑模式） -->
+          <div v-if="form.platform === 'claude-console'" class="mt-4">
+            <label class="flex items-start">
+              <input
+                v-model="form.enableOpenAIProtocolBridge"
+                class="mt-1 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                type="checkbox"
+              />
+              <div class="ml-3">
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  OpenAI 协议桥接（Claude Code）
+                </span>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  启用后会创建符合 Claude Code 规范的访问路径，将该路径上的请求转发到这里配置的
+                  OpenAI API URL，并通过 llm-protocol-bridge 适配所需的数据结构
                 </p>
               </div>
             </label>
@@ -4328,6 +4368,9 @@ const form = ref({
   serialQueueEnabled: (props.account?.maxConcurrency || 0) > 0, // 账户级串行队列开关
   interceptWarmup:
     props.account?.interceptWarmup === true || props.account?.interceptWarmup === 'true', // 拦截预热请求
+  enableOpenAIProtocolBridge:
+    props.account?.enableOpenAIProtocolBridge === true ||
+    props.account?.enableOpenAIProtocolBridge === 'true', // OpenAI 协议桥接
   groupId: '',
   groupIds: [],
   projectId: props.account?.projectId || '',
@@ -5511,6 +5554,7 @@ const createAccount = async () => {
       data.rateLimitDuration = form.value.enableRateLimit ? form.value.rateLimitDuration || 60 : 0
       if (form.value.platform === 'claude-console') {
         data.interceptWarmup = !!form.value.interceptWarmup
+        data.enableOpenAIProtocolBridge = !!form.value.enableOpenAIProtocolBridge
       }
       // 额度管理字段
       data.dailyQuota = form.value.dailyQuota || 0
@@ -5860,6 +5904,8 @@ const updateAccount = async () => {
       data.rateLimitDuration = form.value.enableRateLimit ? form.value.rateLimitDuration || 60 : 0
       // 拦截预热请求
       data.interceptWarmup = !!form.value.interceptWarmup
+      // OpenAI 协议桥接
+      data.enableOpenAIProtocolBridge = !!form.value.enableOpenAIProtocolBridge
       // 额度管理字段
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
@@ -6450,6 +6496,9 @@ watch(
         autoStopOnWarning: newAccount.autoStopOnWarning || false,
         interceptWarmup:
           newAccount.interceptWarmup === true || newAccount.interceptWarmup === 'true',
+        enableOpenAIProtocolBridge:
+          newAccount.enableOpenAIProtocolBridge === true ||
+          newAccount.enableOpenAIProtocolBridge === 'true',
         useUnifiedUserAgent: newAccount.useUnifiedUserAgent || false,
         useUnifiedClientId: newAccount.useUnifiedClientId || false,
         unifiedClientId: newAccount.unifiedClientId || '',

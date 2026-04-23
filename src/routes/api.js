@@ -133,6 +133,114 @@ function isOldSession(body) {
   return false
 }
 
+function buildDirectConsoleBridgeError(httpStatus, type, message) {
+  const error = new Error(message)
+  error.httpStatus = httpStatus
+  error.errorPayload = {
+    error: {
+      type,
+      message
+    }
+  }
+  return error
+}
+
+async function resolveDirectClaudeConsoleSelection(req, requestedModel = null) {
+  const accountId = req.params?.accountId
+  if (!accountId) {
+    return null
+  }
+
+  const account = await claudeConsoleAccountService.getAccount(accountId)
+  const bridgeEnabled =
+    account?.enableOpenAIProtocolBridge === true || account?.enableOpenAIProtocolBridge === 'true'
+
+  if (!account || !bridgeEnabled) {
+    throw buildDirectConsoleBridgeError(
+      404,
+      'not_found_error',
+      'Claude Code bridge path not found for this Claude Console account'
+    )
+  }
+
+  const isAvailable = await unifiedClaudeScheduler._isAccountAvailable(
+    accountId,
+    'claude-console',
+    requestedModel
+  )
+
+  if (!isAvailable) {
+    throw buildDirectConsoleBridgeError(
+      503,
+      'service_unavailable',
+      'The requested Claude Console bridge account is currently unavailable'
+    )
+  }
+
+  return {
+    accountId,
+    accountType: 'claude-console'
+  }
+}
+
+async function getDirectClaudeConsoleBridgeAccount(req, requestedModel = null) {
+  const selection = await resolveDirectClaudeConsoleSelection(req, requestedModel)
+  const account = await claudeConsoleAccountService.getAccount(selection.accountId)
+
+  if (!account) {
+    throw buildDirectConsoleBridgeError(
+      404,
+      'not_found_error',
+      'Claude Code bridge path not found for this Claude Console account'
+    )
+  }
+
+  return account
+}
+
+function buildWrappedClaudeConsoleModels(account) {
+  const modelService = require('../services/modelService')
+  const allModels = modelService.getAllModels()
+  const supportedModels = account?.supportedModels
+
+  if (Array.isArray(supportedModels) && supportedModels.length > 0) {
+    const byId = new Map(allModels.map((model) => [model.id, model]))
+    return supportedModels
+      .map(
+        (modelId) =>
+          byId.get(modelId) || {
+            id: modelId,
+            object: 'model',
+            created: 0,
+            owned_by: 'anthropic'
+          }
+      )
+      .sort((a, b) => a.id.localeCompare(b.id))
+  }
+
+  if (
+    supportedModels &&
+    typeof supportedModels === 'object' &&
+    !Array.isArray(supportedModels) &&
+    Object.keys(supportedModels).length > 0
+  ) {
+    const byId = new Map(allModels.map((model) => [model.id, model]))
+    return Object.keys(supportedModels)
+      .map(
+        (modelId) =>
+          byId.get(modelId) || {
+            id: modelId,
+            object: 'model',
+            created: 0,
+            owned_by: 'anthropic'
+          }
+      )
+      .sort((a, b) => a.id.localeCompare(b.id))
+  }
+
+  return allModels
+}
+
 // 🔧 共享的消息处理函数
 async function handleMessagesRequest(req, res) {
   try {
@@ -343,12 +451,15 @@ async function handleMessagesRequest(req, res) {
       let accountId
       let accountType
       try {
-        const selection = await unifiedClaudeScheduler.selectAccountForApiKey(
-          req.apiKey,
-          sessionHash,
-          requestedModel,
-          forcedAccount
-        )
+        const directSelection = await resolveDirectClaudeConsoleSelection(req, requestedModel)
+        const selection =
+          directSelection ||
+          (await unifiedClaudeScheduler.selectAccountForApiKey(
+            req.apiKey,
+            sessionHash,
+            requestedModel,
+            forcedAccount
+          ))
         ;({ accountId, accountType } = selection)
       } catch (error) {
         // 处理会话绑定账户不可用的错误
@@ -1054,12 +1165,15 @@ async function handleMessagesRequest(req, res) {
       let accountId
       let accountType
       try {
-        const selection = await unifiedClaudeScheduler.selectAccountForApiKey(
-          req.apiKey,
-          sessionHash,
-          requestedModel,
-          forcedAccountNonStream
-        )
+        const directSelection = await resolveDirectClaudeConsoleSelection(req, requestedModel)
+        const selection =
+          directSelection ||
+          (await unifiedClaudeScheduler.selectAccountForApiKey(
+            req.apiKey,
+            sessionHash,
+            requestedModel,
+            forcedAccountNonStream
+          ))
         ;({ accountId, accountType } = selection)
       } catch (error) {
         if (error.code === 'SESSION_BINDING_ACCOUNT_UNAVAILABLE') {
@@ -1421,6 +1535,16 @@ async function handleMessagesRequest(req, res) {
       }
     }
 
+    if (handledError.httpStatus && handledError.errorPayload) {
+      if (!res.headersSent) {
+        return res.status(handledError.httpStatus).json(handledError.errorPayload)
+      }
+      if (!res.destroyed && !res.finished) {
+        res.end()
+      }
+      return undefined
+    }
+
     logger.error('❌ Claude relay error:', handledError.message, {
       code: handledError.code,
       stack: handledError.stack
@@ -1472,6 +1596,87 @@ router.post('/v1/messages', authenticateApiKey, handleMessagesRequest)
 
 // 🚀 Claude API messages 端点 - /claude/v1/messages (别名)
 router.post('/claude/v1/messages', authenticateApiKey, handleMessagesRequest)
+
+// 🚀 Claude Code 直连 Claude Console 包装路径
+router.post('/console/:accountId/v1/messages', authenticateApiKey, handleMessagesRequest)
+
+// 📋 Claude Code 直连 Claude Console 模型列表包装路径
+router.get('/console/:accountId/v1/models', authenticateApiKey, async (req, res) => {
+  try {
+    const account = await getDirectClaudeConsoleBridgeAccount(req)
+
+    return res.json({
+      object: 'list',
+      data: buildWrappedClaudeConsoleModels(account)
+    })
+  } catch (error) {
+    if (error.httpStatus && error.errorPayload) {
+      return res.status(error.httpStatus).json(error.errorPayload)
+    }
+
+    logger.error('❌ Wrapped Claude Console models error:', error)
+    return res.status(500).json({
+      error: 'Failed to get wrapped Claude Console models',
+      message: error.message
+    })
+  }
+})
+
+// 👤 Claude Code 直连 Claude Console 用户信息包装路径
+router.get('/console/:accountId/v1/me', authenticateApiKey, async (req, res) => {
+  try {
+    await getDirectClaudeConsoleBridgeAccount(req)
+
+    return res.json({
+      id: `user_${req.apiKey.id}`,
+      type: 'user',
+      display_name: req.apiKey.name || 'API User',
+      created_at: new Date().toISOString()
+    })
+  } catch (error) {
+    if (error.httpStatus && error.errorPayload) {
+      return res.status(error.httpStatus).json(error.errorPayload)
+    }
+
+    logger.error('❌ Wrapped Claude Console user info error:', error)
+    return res.status(500).json({
+      error: 'Failed to get wrapped Claude Console user info',
+      message: error.message
+    })
+  }
+})
+
+// 💰 Claude Code 直连 Claude Console 用量包装路径
+router.get(
+  '/console/:accountId/v1/organizations/:org_id/usage',
+  authenticateApiKey,
+  async (req, res) => {
+    try {
+      await getDirectClaudeConsoleBridgeAccount(req)
+      const usage = await apiKeyService.getUsageStats(req.apiKey.id)
+
+      return res.json({
+        object: 'usage',
+        data: [
+          {
+            type: 'credit_balance',
+            credit_balance: req.apiKey.tokenLimit - (usage.totalTokens || 0)
+          }
+        ]
+      })
+    } catch (error) {
+      if (error.httpStatus && error.errorPayload) {
+        return res.status(error.httpStatus).json(error.errorPayload)
+      }
+
+      logger.error('❌ Wrapped Claude Console usage error:', error)
+      return res.status(500).json({
+        error: 'Failed to get wrapped Claude Console usage info',
+        message: error.message
+      })
+    }
+  }
+)
 
 // 📋 模型列表端点 - 支持 Claude, OpenAI, Gemini
 router.get('/v1/models', authenticateApiKey, async (req, res) => {
@@ -1670,7 +1875,7 @@ router.get('/v1/organizations/:org_id/usage', authenticateApiKey, async (req, re
 })
 
 // 🔢 Token计数端点 - count_tokens beta API
-router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) => {
+async function handleCountTokensRequest(req, res) {
   // 按路径强制分流到 Gemini OAuth 账户（避免 model 前缀混乱）
   const forcedVendor = req._anthropicVendor || null
   const requiredService =
@@ -1735,11 +1940,10 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
   let attempt = 0
 
   const processRequest = async () => {
-    const { accountId, accountType } = await unifiedClaudeScheduler.selectAccountForApiKey(
-      req.apiKey,
-      sessionHash,
-      requestedModel
-    )
+    const directSelection = await resolveDirectClaudeConsoleSelection(req, requestedModel)
+    const { accountId, accountType } =
+      directSelection ||
+      (await unifiedClaudeScheduler.selectAccountForApiKey(req.apiKey, sessionHash, requestedModel))
 
     if (accountType === 'ccr') {
       throw Object.assign(new Error('Token counting is not supported for CCR accounts'), {
@@ -1767,6 +1971,18 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
 
     // 🔍 claude-console 账户特殊处理：检查 count_tokens 端点是否可用
     if (accountType === 'claude-console') {
+      const account = await claudeConsoleAccountService.getAccount(accountId)
+      const bridgeEnabled =
+        account?.enableOpenAIProtocolBridge === true ||
+        account?.enableOpenAIProtocolBridge === 'true'
+
+      if (bridgeEnabled) {
+        logger.info(
+          `⏭️ count_tokens is not forwarded for OpenAI bridge account ${accountId}, returning fallback response`
+        )
+        return { fallbackResponse: true }
+      }
+
       const isUnavailable = await claudeConsoleAccountService.isCountTokensUnavailable(accountId)
       if (isUnavailable) {
         logger.info(
@@ -1927,7 +2143,14 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
       return
     }
   }
-})
+}
+
+router.post('/v1/messages/count_tokens', authenticateApiKey, handleCountTokensRequest)
+router.post(
+  '/console/:accountId/v1/messages/count_tokens',
+  authenticateApiKey,
+  handleCountTokensRequest
+)
 
 // Claude Code 客户端遥测端点 - 返回成功响应避免 404 日志
 router.post('/api/event_logging/batch', (req, res) => {

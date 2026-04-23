@@ -93,4 +93,40 @@ describe('openai chat completions protocol adapter', () => {
     expect(encodedChunk.chunk).toContain('"content":"final answer"')
     expect(encodedChunk.chunk).toContain('[DONE]')
   })
+
+  test('omits empty tool fields when encoding requests without tools', () => {
+    const encoded = chat.encodeRequest({
+      model: 'gpt-5',
+      system: [],
+      messages: [{ role: 'user', blocks: [{ type: 'text', text: 'hello' }] }],
+      tools: [],
+      toolChoice: null,
+      stream: true
+    })
+
+    expect(encoded.body).not.toHaveProperty('tools')
+    expect(encoded.body).not.toHaveProperty('tool_choice')
+  })
+
+  test('encodes sampling fields from unified requests', () => {
+    const encoded = chat.encodeRequest({
+      model: 'gpt-5',
+      system: ['Be helpful'],
+      messages: [{ role: 'user', blocks: [{ type: 'text', text: 'hello' }] }],
+      tools: [],
+      toolChoice: null,
+      sampling: {
+        maxTokens: 256,
+        temperature: 0.2,
+        topP: 0.8,
+        stop: ['END']
+      },
+      stream: true
+    })
+
+    expect(encoded.body.max_tokens).toBe(256)
+    expect(encoded.body.temperature).toBe(0.2)
+    expect(encoded.body.top_p).toBe(0.8)
+    expect(encoded.body.stop).toEqual(['END'])
+  })
 })

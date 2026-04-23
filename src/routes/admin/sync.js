@@ -249,6 +249,10 @@ router.get('/sync/export-accounts', authenticateAdmin, async (req, res) => {
         base_url: full.apiUrl
       }
 
+      if (full.enableOpenAIProtocolBridge && full.claudeCodeBridgeBasePath) {
+        credentials.claude_code_base_path = full.claudeCodeBridgeBasePath
+      }
+
       if (modelMapping) {
         credentials.model_mapping = modelMapping
       }

@@ -3,8 +3,9 @@ const { normalizeUsage } = require('../../core/usageNormalizer')
 
 function decodeResponse(body) {
   const blocks = []
+  const outputItems = body.output || []
 
-  for (const item of body.output || []) {
+  for (const item of outputItems) {
     if (item.type === 'reasoning') {
       blocks.push({
         type: 'reasoning',
@@ -25,13 +26,16 @@ function decodeResponse(body) {
     }
   }
 
+  const hasToolCall = outputItems.some((item) => item.type === 'function_call')
+  const hasOutputText = outputItems.some((item) => item.type === 'output_text')
+
   return normalizeUnifiedResponse({
     id: body.id,
     protocol: 'openai.responses',
     model: body.model,
     role: 'assistant',
     blocks,
-    stop: { reason: 'end_turn', sequence: null },
+    stop: { reason: hasToolCall && !hasOutputText ? 'tool_use' : 'end_turn', sequence: null },
     usage: normalizeUsage(body.usage || {}),
     raw: body
   })

@@ -4,8 +4,12 @@ describe('anthropic protocol adapter', () => {
   test('decodes anthropic request into unified request with thinking, tool_result and service tier', () => {
     const unified = anthropic.decodeRequest({
       model: 'claude-sonnet-4-5',
-      system: 'Follow policy',
+      system: [{ type: 'text', text: 'Follow policy' }],
       stream: true,
+      max_tokens: 256,
+      temperature: 0.2,
+      top_p: 0.8,
+      stop_sequences: ['END'],
       service_tier: 'standard_only',
       metadata: { user_id: 'user-1' },
       tools: [{ name: 'lookup_weather', input_schema: { type: 'object' } }],
@@ -35,10 +39,18 @@ describe('anthropic protocol adapter', () => {
     expect(unified).toMatchObject({
       protocol: 'anthropic.messages',
       model: 'claude-sonnet-4-5',
+      system: ['Follow policy'],
       stream: true,
       serviceTier: 'standard_only',
       metadata: { user_id: 'user-1' },
       toolChoice: { type: 'tool', name: 'lookup_weather' }
+    })
+    expect(unified.sampling).toEqual({
+      maxTokens: 256,
+      temperature: 0.2,
+      topP: 0.8,
+      topK: undefined,
+      stop: ['END']
     })
     expect(unified.messages[0].blocks[1]).toEqual(
       expect.objectContaining({ type: 'image', mediaType: 'image/png' })
@@ -81,10 +93,15 @@ describe('anthropic protocol adapter', () => {
       { type: 'message_start', message: { id: 'resp-1', role: 'assistant', model: 'gpt-5' } },
       { type: 'block_start', index: 0, block: { type: 'reasoning' } },
       { type: 'block_delta', index: 0, block: { type: 'reasoning', text: 'step 1' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
       { type: 'message_stop', stop: { reason: 'end_turn' } }
     ])
 
     expect(encodedChunk.chunk).toContain('event: message_start')
+    expect(encodedChunk.chunk).toContain('"usage":{"input_tokens":0,"output_tokens":0}')
+    expect(encodedChunk.chunk).toContain(
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0}}'
+    )
     expect(encodedChunk.chunk).toContain('thinking_delta')
     expect(encodedChunk.chunk).toContain('event: message_stop')
   })

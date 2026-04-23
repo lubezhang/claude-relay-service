@@ -10,13 +10,21 @@ function decodeStream(chunk) {
       events.push({ type: 'message_start', message: payload.message })
     }
     if (payload.type === 'content_block_start') {
+      const contentBlock = payload.content_block || {}
       events.push({
         type: 'block_start',
         index: payload.index,
         block:
-          payload.content_block.type === 'thinking'
+          contentBlock.type === 'thinking'
             ? { type: 'reasoning' }
-            : { type: payload.content_block.type }
+            : contentBlock.type === 'tool_use'
+              ? {
+                  type: 'tool_call',
+                  id: contentBlock.id,
+                  name: contentBlock.name,
+                  input: contentBlock.input || {}
+                }
+              : { type: contentBlock.type }
       })
     }
     if (payload.type === 'content_block_delta') {
@@ -38,7 +46,10 @@ function decodeStream(chunk) {
         events.push({
           type: 'block_delta',
           index: payload.index,
-          block: { type: 'tool_call', partialJson: payload.delta.partial_json }
+          block: {
+            type: 'tool_call',
+            partialJson: payload.delta.partial_json
+          }
         })
       }
     }
