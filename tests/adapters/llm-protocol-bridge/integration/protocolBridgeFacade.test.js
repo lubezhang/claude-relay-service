@@ -95,6 +95,43 @@ describe('ProtocolBridge facade', () => {
     expect(stopChunk.chunk).toContain('"output_tokens":4')
   })
 
+  test('preserves usage when chat completions sends it in a separate final chunk', () => {
+    const sessionId = 'session-chat-usage-tail'
+    const contentChunk = bridge.translateStreamChunk({
+      sourceProtocol: 'openai.chat_completions',
+      targetProtocol: 'anthropic.messages',
+      sessionId,
+      chunk:
+        'data: {"id":"chatcmpl-2","model":"gpt-5","choices":[{"delta":{"role":"assistant","content":"hello"}}]}\n\n'
+    })
+    const finishChunk = bridge.translateStreamChunk({
+      sourceProtocol: 'openai.chat_completions',
+      targetProtocol: 'anthropic.messages',
+      sessionId,
+      chunk:
+        'data: {"id":"chatcmpl-2","model":"gpt-5","choices":[{"finish_reason":"stop","delta":{}}]}\n\n'
+    })
+    const usageChunk = bridge.translateStreamChunk({
+      sourceProtocol: 'openai.chat_completions',
+      targetProtocol: 'anthropic.messages',
+      sessionId,
+      chunk:
+        'data: {"id":"chatcmpl-2","model":"gpt-5","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3}}\n\n'
+    })
+    const doneChunk = bridge.translateStreamChunk({
+      sourceProtocol: 'openai.chat_completions',
+      targetProtocol: 'anthropic.messages',
+      sessionId,
+      chunk: 'data: [DONE]\n\n'
+    })
+
+    expect(contentChunk.chunk).toContain('"text_delta"')
+    expect(finishChunk.chunk).toContain('"stop_reason":"end_turn"')
+    expect(usageChunk.chunk).toContain('"input_tokens":8')
+    expect(usageChunk.chunk).toContain('"output_tokens":3')
+    expect(doneChunk.chunk).toContain('event: message_stop')
+  })
+
   test('preserves tool use stream metadata and usage when bridging anthropic to chat completions', () => {
     const sessionId = 'session-tool-anthropic'
     const startChunk = bridge.translateStreamChunk({

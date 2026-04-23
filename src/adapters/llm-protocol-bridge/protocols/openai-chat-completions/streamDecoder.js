@@ -2,7 +2,16 @@ function decodeStream(chunk) {
   const events = []
 
   for (const line of chunk.split('\n')) {
-    if (!line.startsWith('data: ') || line === 'data: [DONE]') {
+    if (!line.startsWith('data: ')) {
+      continue
+    }
+
+    if (line === 'data: [DONE]') {
+      events.push({
+        type: 'message_stop',
+        stop: { reason: null },
+        usage: null
+      })
       continue
     }
 
@@ -41,8 +50,17 @@ function decodeStream(chunk) {
     }
     if (choice.finish_reason) {
       events.push({
-        type: 'message_stop',
-        stop: { reason: choice.finish_reason === 'tool_calls' ? 'tool_use' : 'end_turn' },
+        type: 'message_delta',
+        delta: { stop_reason: choice.finish_reason === 'tool_calls' ? 'tool_use' : 'end_turn' },
+        usage: payload.usage
+      })
+      continue
+    }
+
+    if (payload.usage) {
+      events.push({
+        type: 'message_delta',
+        delta: {},
         usage: payload.usage
       })
     }

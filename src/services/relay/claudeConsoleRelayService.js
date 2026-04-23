@@ -77,6 +77,32 @@ class ClaudeConsoleRelayService {
     return cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
   }
 
+  _hasMeaningfulClaudeUsage(usage = {}) {
+    if (!usage || typeof usage !== 'object') {
+      return false
+    }
+
+    const directTotal =
+      Number(usage.input_tokens || 0) +
+      Number(usage.output_tokens || 0) +
+      Number(usage.cache_creation_input_tokens || 0) +
+      Number(usage.cache_read_input_tokens || 0)
+
+    if (directTotal > 0) {
+      return true
+    }
+
+    const cacheCreation = usage.cache_creation
+    if (cacheCreation && typeof cacheCreation === 'object') {
+      return (
+        Number(cacheCreation.ephemeral_5m_input_tokens || 0) > 0 ||
+        Number(cacheCreation.ephemeral_1h_input_tokens || 0) > 0
+      )
+    }
+
+    return false
+  }
+
   // 🚀 转发请求到Claude Console API
   async relayRequest(
     requestBody,
@@ -1252,6 +1278,8 @@ class ClaudeConsoleRelayService {
                       }
 
                       if (data.type === 'message_delta' && data.usage) {
+                        const hasMeaningfulUsage = this._hasMeaningfulClaudeUsage(data.usage)
+
                         // 提取所有usage字段，message_delta可能包含完整的usage信息
                         if (data.usage.output_tokens !== undefined) {
                           collectedUsageData.output_tokens = data.usage.output_tokens || 0
@@ -1289,6 +1317,13 @@ class ClaudeConsoleRelayService {
                           '📊 [Console] Collected usage data from message_delta:',
                           JSON.stringify(collectedUsageData)
                         )
+
+                        if (!hasMeaningfulUsage) {
+                          logger.debug(
+                            '🫥 [Console] Ignoring placeholder usage event until real upstream usage arrives'
+                          )
+                          continue
+                        }
 
                         // 如果已经收集到了完整数据，触发回调
                         if (
@@ -1381,9 +1416,17 @@ class ClaudeConsoleRelayService {
 
               // 🔧 兜底逻辑：确保所有未保存的usage数据都不会丢失
               if (!finalUsageReported) {
+                const hasMeaningfulCollectedUsage =
+                  this._hasMeaningfulClaudeUsage(collectedUsageData) ||
+                  (collectedUsageData.cache_creation &&
+                    this._hasMeaningfulClaudeUsage({
+                      cache_creation: collectedUsageData.cache_creation
+                    }))
+
                 if (
-                  collectedUsageData.input_tokens !== undefined ||
-                  collectedUsageData.output_tokens !== undefined
+                  hasMeaningfulCollectedUsage &&
+                  (collectedUsageData.input_tokens !== undefined ||
+                    collectedUsageData.output_tokens !== undefined)
                 ) {
                   // 补全缺失的字段
                   if (collectedUsageData.input_tokens === undefined) {
@@ -1411,7 +1454,7 @@ class ClaudeConsoleRelayService {
                   finalUsageReported = true
                 } else {
                   logger.warn(
-                    '⚠️ [Console] Stream completed but no usage data was captured! This indicates a problem with SSE parsing or API response format.'
+                    '⚠️ [Console] Stream completed but no real usage data was captured! This indicates a problem with SSE parsing or API response format.'
                   )
                 }
               }

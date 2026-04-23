@@ -1,4 +1,5 @@
 const axios = require('axios')
+const { PassThrough } = require('stream')
 
 jest.mock('axios')
 
@@ -206,6 +207,102 @@ describe('claudeConsoleRelayService protocol bridge', () => {
       role: 'system',
       content: 'test system prompt'
     })
+  })
+
+  test('waits for real upstream usage instead of finalizing on placeholder anthropic usage events', async () => {
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'acc-stream-1',
+      name: 'console-openai-stream',
+      apiUrl: 'https://openai.example.com/v1/chat/completions',
+      apiKey: 'sk-openai-key',
+      supportedModels: [],
+      userAgent: '',
+      maxConcurrentTasks: 0,
+      disableAutoProtection: false,
+      enableOpenAIProtocolBridge: true
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(null)
+
+    const upstream = new PassThrough()
+    axios.mockResolvedValue({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+      data: upstream
+    })
+
+    const writes = []
+    const responseStream = {
+      headersSent: false,
+      destroyed: false,
+      writableEnded: false,
+      socket: {
+        destroyed: false,
+        bytesWritten: 0,
+        setNoDelay: jest.fn()
+      },
+      on: jest.fn(),
+      getHeader: jest.fn(() => null),
+      writeHead: jest.fn(function writeHead() {
+        this.headersSent = true
+      }),
+      write: jest.fn((chunk) => {
+        writes.push(chunk)
+        return true
+      }),
+      end: jest.fn(function end(callback) {
+        this.writableEnded = true
+        if (typeof callback === 'function') {
+          callback()
+        }
+      })
+    }
+
+    const usageCallback = jest.fn()
+
+    const requestPromise = relayService._makeClaudeConsoleStreamRequest(
+      {
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+        stream: true
+      },
+      {
+        id: 'acc-stream-1',
+        name: 'console-openai-stream',
+        apiUrl: 'https://openai.example.com/v1/chat/completions',
+        apiKey: 'sk-openai-key',
+        userAgent: '',
+        enableOpenAIProtocolBridge: true
+      },
+      null,
+      {},
+      responseStream,
+      'acc-stream-1',
+      usageCallback
+    )
+
+    upstream.write(
+      'data: {"id":"chatcmpl-9","model":"glm-5","choices":[{"delta":{"role":"assistant","content":"hello"}}]}\n\n'
+    )
+    upstream.write(
+      'data: {"id":"chatcmpl-9","model":"glm-5","choices":[{"finish_reason":"stop","delta":{}}]}\n\n'
+    )
+    upstream.write(
+      'data: {"id":"chatcmpl-9","model":"glm-5","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3}}\n\n'
+    )
+    upstream.end('data: [DONE]\n\n')
+
+    await requestPromise
+
+    expect(usageCallback).toHaveBeenCalledTimes(1)
+    expect(usageCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input_tokens: 8,
+        output_tokens: 3,
+        model: 'glm-5',
+        accountId: 'acc-stream-1'
+      })
+    )
+    expect(writes.join('')).toContain('"usage":{"input_tokens":0,"output_tokens":0}')
   })
 
   test('keeps original anthropic relay behavior when bridge disabled', async () => {

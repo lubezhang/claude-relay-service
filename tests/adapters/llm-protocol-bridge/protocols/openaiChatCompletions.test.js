@@ -129,4 +129,18 @@ describe('openai chat completions protocol adapter', () => {
     expect(encoded.body.top_p).toBe(0.8)
     expect(encoded.body.stop).toEqual(['END'])
   })
+
+  test('requests upstream usage for streaming chat completions bridges', () => {
+    const encoded = chat.encodeRequest({
+      model: 'gpt-5',
+      system: [],
+      messages: [{ role: 'user', blocks: [{ type: 'text', text: 'hello' }] }],
+      tools: [],
+      toolChoice: null,
+      sampling: {},
+      stream: true
+    })
+
+    expect(encoded.body.stream_options).toEqual({ include_usage: true })
+  })
 })

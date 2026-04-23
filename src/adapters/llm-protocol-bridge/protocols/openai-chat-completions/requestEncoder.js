@@ -55,6 +55,12 @@ function encodeRequest(unified) {
     stream: unified.stream
   }
 
+  if (unified.stream) {
+    body.stream_options = {
+      include_usage: true
+    }
+  }
+
   if (unified.sampling?.maxTokens !== undefined) {
     body.max_tokens = unified.sampling.maxTokens
   }
