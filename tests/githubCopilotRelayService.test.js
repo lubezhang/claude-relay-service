@@ -13,6 +13,18 @@ describe('githubCopilotProtocol', () => {
     )
   })
 
+  test('buildCopilotBaseUrl uses baseApi override and removes trailing slash', () => {
+    expect(protocol.buildCopilotBaseUrl({ baseApi: 'https://custom.example.com/' })).toBe(
+      'https://custom.example.com'
+    )
+  })
+
+  test('buildGitHubHeaders uses GitHub token authorization scheme', () => {
+    const headers = protocol.buildGitHubHeaders('github-token-1')
+
+    expect(headers.authorization).toBe('token github-token-1')
+  })
+
   test('buildCopilotHeaders includes required Copilot client headers', () => {
     const headers = protocol.buildCopilotHeaders({ vsCodeVersion: '1.99.0' }, 'copilot-token-1', {
       stream: true,

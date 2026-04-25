@@ -9,6 +9,10 @@ const DEFAULT_VSCODE_VERSION = '1.99.0'
 const GITHUB_API_VERSION = '2025-04-01'
 
 function buildCopilotBaseUrl(account = {}) {
+  if (account.baseApi) {
+    return String(account.baseApi).replace(/\/+$/, '')
+  }
+
   const accountType = String(account.accountType || 'individual').toLowerCase()
 
   if (accountType === 'business') {
@@ -24,7 +28,7 @@ function buildCopilotBaseUrl(account = {}) {
 
 function buildGitHubHeaders(token, extraHeaders = {}) {
   return {
-    authorization: `Bearer ${token}`,
+    authorization: `token ${token}`,
     accept: 'application/vnd.github+json',
     'x-github-api-version': GITHUB_API_VERSION,
     ...extraHeaders
