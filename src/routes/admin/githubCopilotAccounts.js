@@ -12,6 +12,14 @@ const DEFAULT_DEVICE_AUTH_TTL = 900
 
 const getAuthSessionKey = (authSessionId) => `${AUTH_SESSION_KEY_PREFIX}${authSessionId}`
 
+function sanitizeError(error) {
+  return {
+    message: error?.message || 'Unknown error',
+    code: error?.code,
+    status: error?.response?.status
+  }
+}
+
 router.post('/github-copilot-accounts/auth/start', authenticateAdmin, async (req, res) => {
   try {
     const client = redis.getClientSafe()
@@ -45,7 +53,7 @@ router.post('/github-copilot-accounts/auth/start', authenticateAdmin, async (req
       interval
     })
   } catch (error) {
-    logger.error('Failed to start GitHub Copilot device authorization:', error)
+    logger.error('Failed to start GitHub Copilot device authorization:', sanitizeError(error))
     return res.status(500).json({
       success: false,
       error: 'Failed to start device authorization',
@@ -133,7 +141,7 @@ router.post('/github-copilot-accounts/auth/poll', authenticateAdmin, async (req,
       data: account
     })
   } catch (error) {
-    logger.error('Failed to poll GitHub Copilot device authorization:', error)
+    logger.error('Failed to poll GitHub Copilot device authorization:', sanitizeError(error))
     return res.status(500).json({
       success: false,
       error: 'Failed to poll device authorization',
@@ -147,7 +155,7 @@ router.get('/github-copilot-accounts', authenticateAdmin, async (_req, res) => {
     const accounts = await githubCopilotAccountService.getAllAccounts(true)
     return res.json({ success: true, data: accounts })
   } catch (error) {
-    logger.error('Failed to get GitHub Copilot accounts:', error)
+    logger.error('Failed to get GitHub Copilot accounts:', sanitizeError(error))
     return res.status(500).json({
       success: false,
       error: 'Failed to get accounts',
@@ -163,7 +171,10 @@ router.put('/github-copilot-accounts/:id', authenticateAdmin, async (req, res) =
     const account = await githubCopilotAccountService.getAccount(id)
     return res.json({ success: true, data: account })
   } catch (error) {
-    logger.error(`Failed to update GitHub Copilot account ${req.params.id}:`, error)
+    logger.error(
+      `Failed to update GitHub Copilot account ${req.params.id}:`,
+      sanitizeError(error)
+    )
     return res.status(500).json({
       success: false,
       error: 'Failed to update account',
@@ -181,7 +192,10 @@ router.delete('/github-copilot-accounts/:id', authenticateAdmin, async (req, res
       message: 'GitHub Copilot account deleted successfully'
     })
   } catch (error) {
-    logger.error(`Failed to delete GitHub Copilot account ${req.params.id}:`, error)
+    logger.error(
+      `Failed to delete GitHub Copilot account ${req.params.id}:`,
+      sanitizeError(error)
+    )
     return res.status(500).json({
       success: false,
       error: 'Failed to delete account',
@@ -199,7 +213,10 @@ router.post('/github-copilot-accounts/:id/refresh-token', authenticateAdmin, asy
       message: 'GitHub Copilot token refreshed successfully'
     })
   } catch (error) {
-    logger.error(`Failed to refresh GitHub Copilot account token ${req.params.id}:`, error)
+    logger.error(
+      `Failed to refresh GitHub Copilot account token ${req.params.id}:`,
+      sanitizeError(error)
+    )
     return res.status(500).json({
       success: false,
       error: 'Failed to refresh token',

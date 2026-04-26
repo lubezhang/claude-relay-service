@@ -18,6 +18,14 @@ const mockGithubCopilotAccountService = {
   deleteAccount: jest.fn()
 }
 
+const mockLogger = {
+  error: jest.fn(),
+  warn: jest.fn(),
+  info: jest.fn(),
+  debug: jest.fn(),
+  success: jest.fn()
+}
+
 const emptyRouteModules = [
   '../src/routes/admin/apiKeys',
   '../src/routes/admin/accountGroups',
@@ -94,13 +102,7 @@ describe('admin GitHub Copilot accounts routes', () => {
       () => mockGithubCopilotAccountService
     )
 
-    jest.doMock('../src/utils/logger', () => ({
-      error: jest.fn(),
-      warn: jest.fn(),
-      info: jest.fn(),
-      debug: jest.fn(),
-      success: jest.fn()
-    }))
+    jest.doMock('../src/utils/logger', () => mockLogger)
 
     mockUnusedAdminRoutes()
   })
@@ -277,7 +279,6 @@ describe('admin GitHub Copilot accounts routes', () => {
     })
     expect(mockGithubCopilotAccountService.deleteAccount).toHaveBeenCalledWith('account-1')
   })
-
   test('POST /admin/github-copilot-accounts/:id/refresh-token refreshes Copilot token', async () => {
     mockGithubCopilotAccountService.ensureCopilotToken.mockResolvedValue('copilot-token')
 
@@ -292,5 +293,75 @@ describe('admin GitHub Copilot accounts routes', () => {
       message: 'GitHub Copilot token refreshed successfully'
     })
     expect(mockGithubCopilotAccountService.ensureCopilotToken).toHaveBeenCalledWith('account-1')
+  })
+
+  test('auth/start logs sanitized errors without access token or device code', async () => {
+    const error = new Error('upstream rejected request')
+    error.code = 'EUPSTREAM'
+    error.access_token = 'ghu_secret_access_token'
+    error.device_code = 'secret-device-code'
+    error.response = {
+      status: 502,
+      data: {
+        access_token: 'nested_secret_access_token',
+        device_code: 'nested-secret-device-code'
+      }
+    }
+    mockGithubCopilotAccountService.startDeviceAuthorization.mockRejectedValue(error)
+
+    const app = createApp()
+    const response = await request(app).post('/admin/github-copilot-accounts/auth/start').send({})
+
+    expect(response.status).toBe(500)
+    expect(mockLogger.error).toHaveBeenCalledTimes(1)
+
+    const loggedPayload = JSON.stringify(mockLogger.error.mock.calls[0])
+    expect(loggedPayload).not.toContain('ghu_secret_access_token')
+    expect(loggedPayload).not.toContain('secret-device-code')
+    expect(loggedPayload).not.toContain('nested_secret_access_token')
+    expect(loggedPayload).not.toContain('nested-secret-device-code')
+    expect(loggedPayload).toContain('EUPSTREAM')
+    expect(loggedPayload).toContain('502')
+  })
+
+  test('auth/poll logs sanitized errors without access token or device code', async () => {
+    mockRedisClient.get.mockResolvedValue(
+      JSON.stringify({
+        device_code: 'stored-secret-device-code',
+        accountData: { name: 'Copilot Account' },
+        interval: 5,
+        createdAt: '2026-04-25T00:00:00.000Z'
+      })
+    )
+
+    const error = new Error('GitHub poll failed')
+    error.code = 'EPOLL'
+    error.access_token = 'ghu_poll_secret_access_token'
+    error.device_code = 'poll-secret-device-code'
+    error.response = {
+      status: 500,
+      data: {
+        access_token: 'nested_poll_secret_access_token',
+        device_code: 'nested-poll-secret-device-code'
+      }
+    }
+    mockGithubCopilotAccountService.pollDeviceAuthorization.mockRejectedValue(error)
+
+    const app = createApp()
+    const response = await request(app)
+      .post('/admin/github-copilot-accounts/auth/poll')
+      .send({ authSessionId: 'session-1' })
+
+    expect(response.status).toBe(500)
+    expect(mockLogger.error).toHaveBeenCalledTimes(1)
+
+    const loggedPayload = JSON.stringify(mockLogger.error.mock.calls[0])
+    expect(loggedPayload).not.toContain('ghu_poll_secret_access_token')
+    expect(loggedPayload).not.toContain('poll-secret-device-code')
+    expect(loggedPayload).not.toContain('stored-secret-device-code')
+    expect(loggedPayload).not.toContain('nested_poll_secret_access_token')
+    expect(loggedPayload).not.toContain('nested-poll-secret-device-code')
+    expect(loggedPayload).toContain('EPOLL')
+    expect(loggedPayload).toContain('500')
   })
 })
