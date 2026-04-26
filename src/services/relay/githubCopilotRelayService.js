@@ -2,6 +2,12 @@ const axios = require('axios')
 const config = require('../../../config/config')
 const logger = require('../../utils/logger')
 const ProxyHelper = require('../../utils/proxyHelper')
+const apiKeyService = require('../apiKeyService')
+const { updateRateLimitCounters } = require('../../utils/rateLimitHelper')
+const {
+  createRequestDetailMeta,
+  extractOpenAICacheReadTokens
+} = require('../../utils/requestDetailHelper')
 const githubCopilotAccountService = require('../account/githubCopilotAccountService')
 const {
   buildCopilotBaseUrl,
@@ -9,21 +15,51 @@ const {
   hasVisionContent
 } = require('../githubCopilotProtocol')
 
+function sanitizeError(error) {
+  return {
+    message: error?.message,
+    code: error?.code,
+    status: error?.response?.status
+  }
+}
+
 class GithubCopilotRelayService {
   constructor() {
     this.defaultTimeout = config.requestTimeout || 600000
   }
 
-  async handleRequest(req, res, account, _apiKeyData) {
+  async handleRequest(req, res, account, apiKeyData) {
     const abortController = new AbortController()
-    const handleClientClose = () => {
+    let upstreamStream = null
+
+    const destroyUpstream = () => {
       if (!abortController.signal.aborted) {
-        logger.info(`GitHub Copilot client disconnected: ${account?.id || 'unknown'}`)
         abortController.abort()
+      }
+
+      if (upstreamStream && typeof upstreamStream.destroy === 'function' && !upstreamStream.destroyed) {
+        upstreamStream.destroy()
+      }
+    }
+
+    const handleClientClose = () => {
+      logger.info(`GitHub Copilot client disconnected: ${account?.id || 'unknown'}`)
+      destroyUpstream()
+    }
+
+    const removeClientListeners = () => {
+      req.removeListener('close', handleClientClose)
+      req.removeListener('aborted', handleClientClose)
+      if (typeof res.removeListener === 'function') {
+        res.removeListener('close', handleClientClose)
       }
     }
 
     req.once('close', handleClientClose)
+    req.once('aborted', handleClientClose)
+    if (typeof res.once === 'function') {
+      res.once('close', handleClientClose)
+    }
 
     try {
       const copilotToken = await githubCopilotAccountService.ensureCopilotToken(account.id)
@@ -38,14 +74,16 @@ class GithubCopilotRelayService {
       const upstream = await axios.post(targetUrl, req.body, requestConfig)
 
       if (isStream) {
-        return await this._handleStreamResponse(req, res, upstream, handleClientClose)
+        upstreamStream = upstream.data
+        return await this._handleStreamResponse(res, upstream, removeClientListeners)
       }
 
-      req.removeListener('close', handleClientClose)
+      removeClientListeners()
+      await this._recordNonStreamUsage(upstream, req, account, apiKeyData)
       return res.status(upstream.status).json(upstream.data)
     } catch (error) {
-      req.removeListener('close', handleClientClose)
-      logger.error('GitHub Copilot relay request failed:', error)
+      removeClientListeners()
+      logger.error('GitHub Copilot relay request failed:', sanitizeError(error))
 
       if (!res.headersSent) {
         return res.status(error.response?.status || 500).json(
@@ -71,6 +109,18 @@ class GithubCopilotRelayService {
     }
 
     req.once('close', handleClientClose)
+    req.once('aborted', handleClientClose)
+    if (typeof res.once === 'function') {
+      res.once('close', handleClientClose)
+    }
+
+    const removeClientListeners = () => {
+      req.removeListener('close', handleClientClose)
+      req.removeListener('aborted', handleClientClose)
+      if (typeof res.removeListener === 'function') {
+        res.removeListener('close', handleClientClose)
+      }
+    }
 
     try {
       const copilotToken = await githubCopilotAccountService.ensureCopilotToken(account.id)
@@ -82,11 +132,11 @@ class GithubCopilotRelayService {
         })
       })
 
-      req.removeListener('close', handleClientClose)
+      removeClientListeners()
       return res.status(upstream.status).json(upstream.data)
     } catch (error) {
-      req.removeListener('close', handleClientClose)
-      logger.error('GitHub Copilot models request failed:', error)
+      removeClientListeners()
+      logger.error('GitHub Copilot models request failed:', sanitizeError(error))
       return res.status(error.response?.status || 500).json(
         error.response?.data || {
           error: {
@@ -124,7 +174,58 @@ class GithubCopilotRelayService {
     return requestConfig
   }
 
-  async _handleStreamResponse(req, res, upstream, handleClientClose) {
+  async _recordNonStreamUsage(upstream, req, account, apiKeyData) {
+    const usageData = upstream.data?.usage
+    if (!usageData || !apiKeyData?.id) {
+      return
+    }
+
+    try {
+      const totalInputTokens = usageData.input_tokens || usageData.prompt_tokens || 0
+      const outputTokens = usageData.output_tokens || usageData.completion_tokens || 0
+      const cacheReadTokens = extractOpenAICacheReadTokens(usageData)
+      const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
+      const usageObject = {
+        input_tokens: actualInputTokens,
+        output_tokens: outputTokens,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: cacheReadTokens
+      }
+      const model = upstream.data?.model || req.body?.model || 'unknown'
+      const costs = await apiKeyService.recordUsageWithDetails(
+        apiKeyData.id,
+        usageObject,
+        model,
+        account.id,
+        'github-copilot',
+        createRequestDetailMeta(req, {
+          requestBody: req.body,
+          stream: false,
+          statusCode: upstream.status
+        })
+      )
+
+      if (req.rateLimitInfo) {
+        await updateRateLimitCounters(
+          req.rateLimitInfo,
+          {
+            inputTokens: actualInputTokens,
+            outputTokens,
+            cacheCreateTokens: 0,
+            cacheReadTokens
+          },
+          model,
+          apiKeyData.id,
+          'github-copilot',
+          costs
+        )
+      }
+    } catch (error) {
+      logger.error('Failed to record GitHub Copilot usage:', sanitizeError(error))
+    }
+  }
+
+  async _handleStreamResponse(res, upstream, removeClientListeners) {
     res.status(upstream.status)
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
@@ -135,28 +236,36 @@ class GithubCopilotRelayService {
     }
 
     return await new Promise((resolve) => {
+      let settled = false
+
+      const finish = (error = null) => {
+        if (settled) {
+          return
+        }
+
+        settled = true
+        removeClientListeners()
+
+        if (error && !res.headersSent) {
+          res.status(502).json({ error: { message: 'Upstream stream error' } })
+        } else if (!res.destroyed && !res.writableEnded) {
+          res.end()
+        }
+
+        resolve()
+      }
+
       upstream.data.on('data', (chunk) => {
-        if (!res.destroyed) {
+        if (!res.destroyed && !res.writableEnded) {
           res.write(chunk)
         }
       })
 
-      upstream.data.on('end', () => {
-        req.removeListener('close', handleClientClose)
-        if (!res.destroyed) {
-          res.end()
-        }
-        resolve()
-      })
-
-      upstream.data.on('error', () => {
-        req.removeListener('close', handleClientClose)
-        if (!res.headersSent) {
-          res.status(502).json({ error: { message: 'Upstream stream error' } })
-        } else if (!res.destroyed) {
-          res.end()
-        }
-        resolve()
+      upstream.data.once('end', () => finish())
+      upstream.data.once('close', () => finish())
+      upstream.data.once('error', (error) => {
+        logger.error('GitHub Copilot upstream stream error:', sanitizeError(error))
+        finish(error)
       })
     })
   }

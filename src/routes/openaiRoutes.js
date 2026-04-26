@@ -120,6 +120,10 @@ function normalizeGpt5ModelForCodex(body = {}) {
   return compatibleModel
 }
 
+function isChatCompletionsPayload(body = {}) {
+  return Array.isArray(body?.messages)
+}
+
 function applyCodexCliAdaptation(body = {}) {
   const fieldsToRemove = [
     'temperature',
@@ -412,6 +416,16 @@ const handleResponses = async (req, res) => {
     }
 
     if (accountType === 'github-copilot') {
+      if (!isChatCompletionsPayload(req.body)) {
+        return res.status(400).json({
+          error: {
+            message: 'GitHub Copilot relay only supports OpenAI chat completions payloads',
+            type: 'unsupported_request',
+            code: 'unsupported_request'
+          }
+        })
+      }
+
       logger.info(`🔀 Using GitHub Copilot relay service for account: ${account.name}`)
       return await githubCopilotRelayService.handleRequest(req, res, account, apiKeyData)
     }

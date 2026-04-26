@@ -89,6 +89,9 @@ describe('githubCopilotProtocol', () => {
 describe('githubCopilotRelayService', () => {
   let axios
   let githubCopilotAccountService
+  let apiKeyService
+  let rateLimitHelper
+  let logger
   let relayService
 
   beforeEach(() => {
@@ -111,6 +114,19 @@ describe('githubCopilotRelayService', () => {
       ensureCopilotToken: jest.fn()
     }))
 
+    jest.doMock('../src/services/apiKeyService', () => ({
+      recordUsageWithDetails: jest.fn(async () => ({ totalTokens: 0, totalCost: 0 }))
+    }))
+
+    jest.doMock('../src/utils/rateLimitHelper', () => ({
+      updateRateLimitCounters: jest.fn(async () => ({ totalTokens: 0, totalCost: 0 }))
+    }))
+
+    jest.doMock('../src/utils/requestDetailHelper', () => ({
+      createRequestDetailMeta: jest.fn(() => ({ requestId: 'detail-1' })),
+      extractOpenAICacheReadTokens: jest.fn(() => 0)
+    }))
+
     jest.doMock('../src/utils/logger', () => ({
       info: jest.fn(),
       warn: jest.fn(),
@@ -125,6 +141,9 @@ describe('githubCopilotRelayService', () => {
 
     axios = require('axios')
     githubCopilotAccountService = require('../src/services/account/githubCopilotAccountService')
+    apiKeyService = require('../src/services/apiKeyService')
+    rateLimitHelper = require('../src/utils/rateLimitHelper')
+    logger = require('../src/utils/logger')
     relayService = require('../src/services/relay/githubCopilotRelayService')
   })
 
@@ -208,6 +227,126 @@ describe('githubCopilotRelayService', () => {
 
     expect(res.writes.join('')).toContain('data: {"id":"chatcmpl-1"}')
     expect(res.end).toHaveBeenCalled()
+  })
+
+  test('records non-stream usage without logging tokens', async () => {
+    githubCopilotAccountService.ensureCopilotToken.mockResolvedValue('copilot-token')
+    axios.post.mockResolvedValue({
+      status: 200,
+      data: {
+        id: 'chatcmpl-usage',
+        model: 'gpt-4o-mini',
+        choices: [],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 7,
+          total_tokens: 18
+        }
+      }
+    })
+
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.path = '/v1/chat/completions'
+    req.originalUrl = '/openai/v1/chat/completions'
+    req.body = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [{ role: 'user', content: 'hello' }]
+    }
+    req.rateLimitInfo = { tokenCountKey: 'tokens', costCountKey: 'cost' }
+
+    const res = createJsonResponse()
+    const account = { id: 'copilot-1', name: 'Copilot', accountType: 'individual' }
+    const apiKeyData = { id: 'key-1' }
+
+    await relayService.handleRequest(req, res, account, apiKeyData)
+
+    expect(apiKeyService.recordUsageWithDetails).toHaveBeenCalledWith(
+      'key-1',
+      {
+        input_tokens: 11,
+        output_tokens: 7,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0
+      },
+      'gpt-4o-mini',
+      'copilot-1',
+      'github-copilot',
+      { requestId: 'detail-1' }
+    )
+    expect(rateLimitHelper.updateRateLimitCounters).toHaveBeenCalledWith(
+      req.rateLimitInfo,
+      {
+        inputTokens: 11,
+        outputTokens: 7,
+        cacheCreateTokens: 0,
+        cacheReadTokens: 0
+      },
+      'gpt-4o-mini',
+      'key-1',
+      'github-copilot',
+      { totalTokens: 0, totalCost: 0 }
+    )
+  })
+
+  test('sanitizes axios errors before logging authorization headers', async () => {
+    githubCopilotAccountService.ensureCopilotToken.mockResolvedValue('copilot-token')
+    const error = new Error('upstream exploded')
+    error.code = 'ERR_BAD_RESPONSE'
+    error.response = { status: 502, data: { error: { message: 'bad gateway' } } }
+    error.config = {
+      headers: {
+        authorization: 'Bearer secret-copilot-token'
+      }
+    }
+    axios.post.mockRejectedValue(error)
+
+    const req = new EventEmitter()
+    req.body = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [{ role: 'user', content: 'hello' }]
+    }
+    const res = createJsonResponse()
+
+    await relayService.handleRequest(req, res, { id: 'copilot-1' }, { id: 'key-1' })
+
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret-copilot-token')
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('Bearer')
+    expect(logger.error.mock.calls[0][1]).toEqual({
+      message: 'upstream exploded',
+      code: 'ERR_BAD_RESPONSE',
+      status: 502
+    })
+  })
+
+  test('destroys upstream stream and resolves when the client closes', async () => {
+    githubCopilotAccountService.ensureCopilotToken.mockResolvedValue('copilot-token')
+    const upstream = new PassThrough()
+    const destroySpy = jest.spyOn(upstream, 'destroy')
+    axios.post.mockResolvedValue({
+      status: 200,
+      data: upstream
+    })
+
+    const req = new EventEmitter()
+    req.body = {
+      model: 'gpt-4o-mini',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }]
+    }
+    const res = createJsonResponse()
+
+    const relayPromise = relayService.handleRequest(req, res, { id: 'copilot-1' }, { id: 'key-1' })
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const requestConfig = axios.post.mock.calls[0][2]
+    req.emit('close')
+
+    await expect(relayPromise).resolves.toBeUndefined()
+    expect(requestConfig.signal.aborted).toBe(true)
+    expect(destroySpy).toHaveBeenCalled()
   })
 
   test('loads models from GitHub Copilot with Copilot authorization headers', async () => {
@@ -308,7 +447,8 @@ describe('openaiRoutes GitHub Copilot dispatch', () => {
 
     jest.doMock('../src/services/apiKeyService', () => ({
       hasPermission: jest.fn(() => true),
-      recordUsage: jest.fn()
+      recordUsage: jest.fn(),
+      recordUsageWithDetails: jest.fn()
     }))
 
     jest.doMock('../src/models/redis', () => ({
@@ -378,7 +518,11 @@ describe('openaiRoutes GitHub Copilot dispatch', () => {
     req.path = '/v1/responses'
     req.originalUrl = '/openai/v1/responses'
     req.headers = { 'user-agent': 'client/1.0' }
-    req.body = { model: 'gpt-4o-mini', stream: false }
+    req.body = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [{ role: 'user', content: 'hello' }]
+    }
     req.apiKey = {
       id: 'key-1',
       permissions: ['openai'],
@@ -403,6 +547,51 @@ describe('openaiRoutes GitHub Copilot dispatch', () => {
     expect(axios.post).not.toHaveBeenCalled()
   })
 
+  test('rejects Responses-like payloads before calling GitHub Copilot relay', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+      accountId: 'copilot-1',
+      accountType: 'github-copilot'
+    })
+    githubCopilotAccountService.getAccount.mockResolvedValue({
+      id: 'copilot-1',
+      name: 'Copilot Account'
+    })
+
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.path = '/v1/responses'
+    req.originalUrl = '/openai/v1/responses'
+    req.headers = { 'user-agent': 'client/1.0' }
+    req.body = {
+      model: 'gpt-4o-mini',
+      input: 'hello',
+      stream: false
+    }
+    req.apiKey = {
+      id: 'key-1',
+      permissions: ['openai'],
+      enableOpenAIResponsesCodexAdaptation: false,
+      enableOpenAIResponsesPayloadRules: false,
+      openaiResponsesPayloadRules: []
+    }
+    req._fromUnifiedEndpoint = false
+
+    const res = createJsonResponse()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.json).toHaveBeenCalledWith({
+      error: {
+        message: 'GitHub Copilot relay only supports OpenAI chat completions payloads',
+        type: 'unsupported_request',
+        code: 'unsupported_request'
+      }
+    })
+    expect(githubCopilotRelayService.handleRequest).not.toHaveBeenCalled()
+    expect(axios.post).not.toHaveBeenCalled()
+  })
+
   test('returns 404 when scheduled github-copilot account cannot be loaded', async () => {
     unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
       accountId: 'copilot-missing',
@@ -415,7 +604,11 @@ describe('openaiRoutes GitHub Copilot dispatch', () => {
     req.path = '/v1/responses'
     req.originalUrl = '/openai/v1/responses'
     req.headers = { 'user-agent': 'client/1.0' }
-    req.body = { model: 'gpt-4o-mini', stream: false }
+    req.body = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [{ role: 'user', content: 'hello' }]
+    }
     req.apiKey = {
       id: 'key-1',
       permissions: ['openai'],
