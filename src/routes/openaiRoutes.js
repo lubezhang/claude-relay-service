@@ -7,7 +7,9 @@ const { authenticateApiKey } = require('../middleware/auth')
 const unifiedOpenAIScheduler = require('../services/scheduler/unifiedOpenAIScheduler')
 const openaiAccountService = require('../services/account/openaiAccountService')
 const openaiResponsesAccountService = require('../services/account/openaiResponsesAccountService')
+const githubCopilotAccountService = require('../services/account/githubCopilotAccountService')
 const openaiResponsesRelayService = require('../services/relay/openaiResponsesRelayService')
+const githubCopilotRelayService = require('../services/relay/githubCopilotRelayService')
 const apiKeyService = require('../services/apiKeyService')
 const redis = require('../models/redis')
 const crypto = require('crypto')
@@ -222,6 +224,18 @@ async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel =
       }
 
       logger.info(`Selected OpenAI-Responses account: ${account.name} (${result.accountId})`)
+    } else if (result.accountType === 'github-copilot') {
+      account = await githubCopilotAccountService.getAccount(result.accountId)
+      if (!account) {
+        const error = new Error(`Scheduled GitHub Copilot account ${result.accountId} not found`)
+        error.statusCode = 404
+        throw error
+      }
+
+      accessToken = null
+      proxy = account.proxy || null
+
+      logger.info(`Selected GitHub Copilot account: ${account.name} (${result.accountId})`)
     } else {
       // 处理普通 OpenAI 账户
       account = await openaiAccountService.getAccount(result.accountId)
@@ -395,6 +409,11 @@ const handleResponses = async (req, res) => {
     if (accountType === 'openai-responses') {
       logger.info(`🔀 Using OpenAI-Responses relay service for account: ${account.name}`)
       return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
+    }
+
+    if (accountType === 'github-copilot') {
+      logger.info(`🔀 Using GitHub Copilot relay service for account: ${account.name}`)
+      return await githubCopilotRelayService.handleRequest(req, res, account, apiKeyData)
     }
 
     if (schedulerModel !== requestedModel) {
