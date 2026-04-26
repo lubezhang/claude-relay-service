@@ -182,16 +182,30 @@ class GithubCopilotAccountService {
       throw new Error('GitHub token is missing for GitHub Copilot account')
     }
 
-    const response = await axios.get(`${GITHUB_API_BASE_URL}/copilot_internal/v2/token`, {
-      headers: buildGitHubHeaders(account.githubToken),
-      timeout: config.requestTimeout || 600000
-    })
+    let response
+    try {
+      response = await axios.get(`${GITHUB_API_BASE_URL}/copilot_internal/v2/token`, {
+        headers: buildGitHubHeaders(account.githubToken),
+        timeout: config.requestTimeout || 600000
+      })
+    } catch (error) {
+      const status = error?.response?.status
+      if (status === 401 || status === 403) {
+        await this.updateAccount(accountId, {
+          status: 'unauthorized',
+          schedulable: false,
+          errorMessage: 'GitHub Copilot authorization failed'
+        })
+        throw new Error('GitHub Copilot authorization failed')
+      }
+      throw error
+    }
 
     if (response?.status === 401 || response?.status === 403) {
       await this.updateAccount(accountId, {
         status: 'unauthorized',
         schedulable: false,
-        errorMessage: 'GitHub token is unauthorized for Copilot token refresh'
+        errorMessage: 'GitHub Copilot authorization failed'
       })
       throw new Error('GitHub Copilot authorization failed')
     }

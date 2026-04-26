@@ -107,4 +107,27 @@ describe('githubCopilotAccountService', () => {
       })
     )
   })
+
+  test('ensureCopilotToken marks account unauthorized when GitHub refresh returns 401', async () => {
+    axios.get.mockRejectedValueOnce({
+      response: { status: 401 }
+    })
+
+    const service = require('../src/services/account/githubCopilotAccountService')
+    const created = await service.createAccount({
+      name: 'copilot-main',
+      githubToken: 'ghu_secret',
+      copilotToken: 'old_token',
+      copilotTokenExpiresAt: '2000-01-01T00:00:00.000Z'
+    })
+
+    await expect(service.ensureCopilotToken(created.id)).rejects.toThrow(
+      'GitHub Copilot authorization failed'
+    )
+
+    const updated = await service.getAccount(created.id)
+    expect(updated.status).toBe('unauthorized')
+    expect([false, 'false']).toContain(updated.schedulable)
+    expect(updated.errorMessage).toBeTruthy()
+  })
 })
