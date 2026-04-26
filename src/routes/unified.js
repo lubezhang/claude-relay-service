@@ -15,6 +15,18 @@ const CodexToOpenAIConverter = require('../services/codexToOpenAI')
 
 const router = express.Router()
 
+function cloneRequestBody(body) {
+  if (body === undefined) {
+    return undefined
+  }
+
+  if (typeof structuredClone === 'function') {
+    return structuredClone(body)
+  }
+
+  return JSON.parse(JSON.stringify(body))
+}
+
 // 🔍 根据模型名称检测后端类型
 function detectBackendFromModel(modelName) {
   if (!modelName) {
@@ -207,6 +219,7 @@ async function routeToBackend(req, res, requestedModel) {
     }
 
     // 输入转换：Chat Completions → Responses API 格式
+    req._openAIChatCompletionsBody = cloneRequestBody(req.body)
     req.body = codexConverter.buildRequestFromOpenAI(req.body)
     // 注入 Codex CLI 系统提示词（与 handleResponses 非 Codex CLI 适配一致）
     req.body.instructions = CODEX_CLI_INSTRUCTIONS

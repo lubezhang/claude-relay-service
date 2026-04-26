@@ -727,3 +727,141 @@ describe('openaiRoutes GitHub Copilot dispatch', () => {
     expect(githubCopilotRelayService.handleRequest).not.toHaveBeenCalled()
   })
 })
+
+describe('unified route GitHub Copilot handoff', () => {
+  let routeToBackend
+  let mockBuildRequestFromOpenAI
+  let mockHandleResponses
+
+  beforeEach(() => {
+    jest.resetModules()
+
+    mockBuildRequestFromOpenAI = jest.fn((body) => ({
+      model: body.model,
+      stream: false,
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'converted hello' }]
+        }
+      ]
+    }))
+    mockHandleResponses = jest.fn(async () => undefined)
+
+    jest.doMock('../src/middleware/auth', () => ({
+      authenticateApiKey: jest.fn((_req, _res, next) => next())
+    }))
+
+    jest.doMock('../src/utils/logger', () => ({
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn()
+    }))
+
+    jest.doMock('../src/routes/openaiClaudeRoutes', () => ({
+      handleChatCompletion: jest.fn()
+    }))
+
+    jest.doMock('../src/handlers/geminiHandlers', () => ({
+      handleStandardGenerateContent: jest.fn(),
+      handleStandardStreamGenerateContent: jest.fn()
+    }))
+
+    jest.doMock('../src/routes/openaiRoutes', () => ({
+      handleResponses: mockHandleResponses,
+      CODEX_CLI_INSTRUCTIONS: 'test codex instructions'
+    }))
+
+    jest.doMock('../src/services/apiKeyService', () => ({
+      hasPermission: jest.fn(() => true)
+    }))
+
+    jest.doMock('../src/services/geminiToOpenAI', () => {
+      return jest.fn().mockImplementation(() => ({
+        createStreamState: jest.fn(),
+        convertStreamChunk: jest.fn(),
+        convertResponse: jest.fn()
+      }))
+    })
+
+    jest.doMock('../src/services/codexToOpenAI', () => {
+      return jest.fn().mockImplementation(() => ({
+        createStreamState: jest.fn(() => ({ data: '' })),
+        convertStreamChunk: jest.fn(() => []),
+        convertResponse: jest.fn((data) => data),
+        buildRequestFromOpenAI: mockBuildRequestFromOpenAI
+      }))
+    })
+
+    ;({ routeToBackend } = require('../src/routes/unified'))
+  })
+
+  afterEach(() => {
+    jest.clearAllMocks()
+  })
+
+  test('preserves unified chat body snapshot before converting to Responses payload', async () => {
+    const originalBody = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'hello unified' }]
+        }
+      ],
+      metadata: {
+        nested: {
+          value: 'keep me'
+        }
+      }
+    }
+
+    const req = new EventEmitter()
+    req.body = originalBody
+    req.apiKey = {
+      permissions: ['openai']
+    }
+    req.url = '/v1/chat/completions'
+
+    const res = createJsonResponse()
+
+    await routeToBackend(req, res, 'gpt-4o-mini')
+
+    originalBody.messages[0].content[0].text = 'mutated after call'
+    originalBody.metadata.nested.value = 'changed later'
+
+    expect(req._fromUnifiedEndpoint).toBe(true)
+    expect(req._openAIChatCompletionsBody).toEqual({
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'hello unified' }]
+        }
+      ],
+      metadata: {
+        nested: {
+          value: 'keep me'
+        }
+      }
+    })
+    expect(req.body).toEqual({
+      model: 'gpt-4o-mini',
+      stream: false,
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'converted hello' }]
+        }
+      ],
+      instructions: 'test codex instructions'
+    })
+    expect(req.url).toBe('/v1/responses')
+    expect(mockHandleResponses).toHaveBeenCalledWith(req, res)
+  })
+})
