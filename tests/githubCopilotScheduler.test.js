@@ -1,3 +1,20 @@
+jest.mock(
+  '../config/config',
+  () => ({
+    security: { encryptionKey: '12345678901234567890123456789012' },
+    session: { stickyTtlHours: 1, renewalThresholdMinutes: 0 }
+  }),
+  { virtual: true }
+)
+
+const mockRedisClient = {
+  get: jest.fn(),
+  setex: jest.fn(),
+  del: jest.fn(),
+  ttl: jest.fn(),
+  expire: jest.fn()
+}
+
 jest.mock('../src/services/account/openaiAccountService', () => ({
   getAccount: jest.fn(),
   getAllAccounts: jest.fn(),
@@ -31,13 +48,7 @@ jest.mock('../src/services/accountGroupService', () => ({
 }))
 
 jest.mock('../src/models/redis', () => ({
-  getClientSafe: jest.fn(() => ({
-    get: jest.fn(),
-    setex: jest.fn(),
-    del: jest.fn(),
-    ttl: jest.fn(),
-    expire: jest.fn()
-  }))
+  getClientSafe: jest.fn(() => mockRedisClient)
 }))
 
 jest.mock('../src/utils/logger', () => ({
@@ -49,19 +60,6 @@ jest.mock('../src/utils/logger', () => ({
 
 jest.mock('../src/utils/upstreamErrorHelper', () => ({
   isTempUnavailable: jest.fn(async () => false)
-}))
-
-jest.mock('../src/utils/commonHelper', () => ({
-  isSchedulable: jest.fn((value) => value === true || value === 'true'),
-  sortAccountsByPriority: jest.fn((accounts) =>
-    [...accounts].sort((a, b) => {
-      const priorityDiff = (a.priority || 50) - (b.priority || 50)
-      if (priorityDiff !== 0) {
-        return priorityDiff
-      }
-      return String(a.lastUsedAt || '0').localeCompare(String(b.lastUsedAt || '0'))
-    })
-  )
 }))
 
 const loadScheduler = () => {
@@ -93,6 +91,7 @@ const buildCopilotAccount = (overrides = {}) => ({
 describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    Object.values(mockRedisClient).forEach((method) => method.mockReset())
   })
 
   test('selectAccountForApiKey returns github-copilot account for dedicated copilot binding', async () => {
@@ -185,6 +184,32 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
     expect(githubCopilotAccountService.getAllAccounts).toHaveBeenCalledWith(true)
   })
 
+  test('shared pool uses real priority sorting for GitHub Copilot accounts', async () => {
+    const {
+      scheduler,
+      openaiAccountService,
+      openaiResponsesAccountService,
+      githubCopilotAccountService
+    } = loadScheduler()
+
+    openaiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
+    githubCopilotAccountService.getAllAccounts.mockResolvedValue([
+      buildCopilotAccount({ id: 'copilot-low-priority', priority: '90' }),
+      buildCopilotAccount({ id: 'copilot-high-priority', priority: '5' })
+    ])
+    githubCopilotAccountService.updateAccount.mockResolvedValue({ success: true })
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Shared Pool Key'
+      })
+    ).resolves.toEqual({
+      accountId: 'copilot-high-priority',
+      accountType: 'github-copilot'
+    })
+  })
+
   test('shared pool skips copilot account with status not equal to active', async () => {
     const {
       scheduler,
@@ -214,6 +239,7 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
   test.each([
     ['missing account', null, 404, 'not found'],
     ['inactive account', buildCopilotAccount({ isActive: 'false' }), 403, 'not active'],
+    ['non-active status account', buildCopilotAccount({ status: 'paused' }), 403, 'not active'],
     ['unauthorized account', buildCopilotAccount({ status: 'unauthorized' }), 403, 'unauthorized'],
     ['error account', buildCopilotAccount({ status: 'error' }), 403, 'not available'],
     [
@@ -246,6 +272,117 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
       })
     }
   )
+
+  test('sticky mapped copilot status not active is unavailable and mapping is deleted', async () => {
+    const {
+      scheduler,
+      openaiAccountService,
+      openaiResponsesAccountService,
+      githubCopilotAccountService
+    } = loadScheduler()
+
+    mockRedisClient.get.mockResolvedValue(
+      JSON.stringify({ accountId: 'copilot-1', accountType: 'github-copilot' })
+    )
+    githubCopilotAccountService.getAccount.mockResolvedValue(
+      buildCopilotAccount({ status: 'paused' })
+    )
+    openaiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
+    githubCopilotAccountService.getAllAccounts.mockResolvedValue([])
+
+    await expect(
+      scheduler.selectAccountForApiKey(
+        {
+          name: 'Sticky Key'
+        },
+        'session-1'
+      )
+    ).rejects.toMatchObject({
+      statusCode: 402,
+      message: 'No available OpenAI accounts'
+    })
+
+    expect(mockRedisClient.del).toHaveBeenCalledWith('unified_openai_session_mapping:session-1')
+  })
+  test('copilot rate limit reset expired clears limited state and restores scheduling', async () => {
+    const { scheduler, githubCopilotAccountService } = loadScheduler()
+
+    githubCopilotAccountService.getAccount.mockResolvedValue(
+      buildCopilotAccount({
+        schedulable: 'false',
+        status: 'rateLimited',
+        rateLimitStatus: 'limited',
+        rateLimitedAt: new Date(Date.now() - 3600000).toISOString(),
+        rateLimitResetAt: new Date(Date.now() - 60000).toISOString()
+      })
+    )
+    githubCopilotAccountService.updateAccount.mockResolvedValue({ success: true })
+
+    await expect(scheduler.isAccountRateLimited('copilot-1', 'github-copilot')).resolves.toBe(false)
+
+    expect(githubCopilotAccountService.updateAccount).toHaveBeenCalledWith('copilot-1', {
+      rateLimitedAt: '',
+      rateLimitStatus: '',
+      rateLimitResetAt: '',
+      status: 'active',
+      errorMessage: '',
+      schedulable: 'true'
+    })
+  })
+
+  test('shared pool restores rate-limited copilot after reset expiry', async () => {
+    const {
+      scheduler,
+      openaiAccountService,
+      openaiResponsesAccountService,
+      githubCopilotAccountService
+    } = loadScheduler()
+
+    openaiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
+    githubCopilotAccountService.getAllAccounts.mockResolvedValue([
+      buildCopilotAccount({
+        id: 'copilot-restored',
+        schedulable: 'true',
+        status: 'rateLimited',
+        rateLimitStatus: 'limited',
+        rateLimitedAt: new Date(Date.now() - 3600000).toISOString(),
+        rateLimitResetAt: new Date(Date.now() - 60000).toISOString(),
+        priority: '5'
+      })
+    ])
+    githubCopilotAccountService.getAccount.mockResolvedValue(
+      buildCopilotAccount({
+        id: 'copilot-restored',
+        schedulable: 'false',
+        status: 'rateLimited',
+        rateLimitStatus: 'limited',
+        rateLimitedAt: new Date(Date.now() - 3600000).toISOString(),
+        rateLimitResetAt: new Date(Date.now() - 60000).toISOString(),
+        priority: '5'
+      })
+    )
+    githubCopilotAccountService.updateAccount.mockResolvedValue({ success: true })
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Recovered Shared Pool Key'
+      })
+    ).resolves.toEqual({
+      accountId: 'copilot-restored',
+      accountType: 'github-copilot'
+    })
+
+    expect(githubCopilotAccountService.updateAccount).toHaveBeenCalledWith('copilot-restored', {
+      rateLimitedAt: '',
+      rateLimitStatus: '',
+      rateLimitResetAt: '',
+      status: 'active',
+      errorMessage: '',
+      schedulable: 'true'
+    })
+  })
 
   test('updateAccountLastUsed writes through githubCopilotAccountService.updateAccount', async () => {
     const { scheduler, githubCopilotAccountService } = loadScheduler()

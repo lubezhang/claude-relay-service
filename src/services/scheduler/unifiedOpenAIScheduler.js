@@ -12,6 +12,14 @@ class UnifiedOpenAIScheduler {
     this.SESSION_MAPPING_PREFIX = 'unified_openai_session_mapping:'
   }
 
+  _isCopilotAccountActive(account) {
+    return (
+      !!account &&
+      (account.isActive === true || account.isActive === 'true') &&
+      account.status === 'active'
+    )
+  }
+
   // 🔧 辅助方法：检查账户是否被限流（兼容字符串和对象格式）
   _isRateLimited(rateLimitStatus) {
     if (!rateLimitStatus) {
@@ -119,10 +127,60 @@ class UnifiedOpenAIScheduler {
     return { canUse: true }
   }
 
+  async _ensureCopilotAccountReadyForScheduling(account, accountId, { sanitized = true } = {}) {
+    if (!account) {
+      return { canUse: false, reason: 'not_found' }
+    }
+
+    if (account.isActive !== true && account.isActive !== 'true') {
+      return { canUse: false, reason: 'not_active' }
+    }
+
+    const hasRateLimitState =
+      this._hasRateLimitFlag(account.rateLimitStatus) || account.status === 'rateLimited'
+
+    if (hasRateLimitState) {
+      const stillLimited = await this.isAccountRateLimited(accountId, 'github-copilot')
+      if (stillLimited) {
+        return { canUse: false, reason: 'rate_limited' }
+      }
+
+      if (sanitized) {
+        account.schedulable = true
+        account.rateLimitStatus = {
+          status: 'normal',
+          isRateLimited: false,
+          rateLimitedAt: null,
+          rateLimitResetAt: null,
+          minutesRemaining: 0
+        }
+        account.rateLimitedAt = null
+        account.rateLimitResetAt = null
+      } else {
+        account.schedulable = 'true'
+        account.rateLimitStatus = ''
+        account.rateLimitedAt = ''
+        account.rateLimitResetAt = ''
+      }
+
+      account.status = 'active'
+      account.errorMessage = ''
+    }
+
+    if (account.status !== 'active') {
+      return { canUse: false, reason: 'not_active' }
+    }
+
+    if (!isSchedulable(account.schedulable)) {
+      return { canUse: false, reason: 'not_schedulable' }
+    }
+
+    return { canUse: true }
+  }
+
   // 🎯 统一调度OpenAI账号
   async selectAccountForApiKey(apiKeyData, sessionHash = null, requestedModel = null) {
     try {
-      // 如果API Key绑定了专属账户或分组，优先使用
       if (apiKeyData.openaiAccountId) {
         // 检查是否是分组
         if (apiKeyData.openaiAccountId.startsWith('group:')) {
@@ -153,9 +211,11 @@ class UnifiedOpenAIScheduler {
 
         const isActiveBoundAccount =
           boundAccount &&
-          (boundAccount.isActive === true || boundAccount.isActive === 'true') &&
-          boundAccount.status !== 'error' &&
-          boundAccount.status !== 'unauthorized'
+          (accountType === 'github-copilot'
+            ? this._isCopilotAccountActive(boundAccount)
+            : (boundAccount.isActive === true || boundAccount.isActive === 'true') &&
+              boundAccount.status !== 'error' &&
+              boundAccount.status !== 'unauthorized')
 
         if (isActiveBoundAccount) {
           // 检查是否临时不可用
@@ -195,23 +255,27 @@ class UnifiedOpenAIScheduler {
                 throw error
               }
             } else if (accountType === 'github-copilot') {
-              if (!isSchedulable(boundAccount.schedulable)) {
-                const errorMsg = `Dedicated account ${boundAccount.name} is not schedulable`
+              const readiness = await this._ensureCopilotAccountReadyForScheduling(
+                boundAccount,
+                boundAccount.id,
+                { sanitized: false }
+              )
+
+              if (!readiness.canUse) {
+                let errorMsg = `Dedicated account ${boundAccount.name} is not available`
+                if (readiness.reason === 'rate_limited') {
+                  errorMsg = `Dedicated account ${boundAccount.name} is currently rate limited`
+                } else if (readiness.reason === 'not_schedulable') {
+                  errorMsg = `Dedicated account ${boundAccount.name} is not schedulable`
+                } else if (readiness.reason === 'not_active') {
+                  errorMsg = `Dedicated account ${boundAccount.name} is not active`
+                }
                 logger.warn(`⚠️ ${errorMsg}`)
                 const error = new Error(errorMsg)
                 error.statusCode = 403
                 throw error
               }
 
-              const hasRateLimitFlag = this._hasRateLimitFlag(boundAccount.rateLimitStatus)
-              if (hasRateLimitFlag) {
-                const errorMsg = `Dedicated account ${boundAccount.name} is currently rate limited`
-                logger.warn(`⚠️ ${errorMsg}`)
-                const error = new Error(errorMsg)
-                error.statusCode = 403
-                throw error
-              }
-            } else {
               const hasRateLimitFlag = this._isRateLimited(boundAccount.rateLimitStatus)
               if (hasRateLimitFlag) {
                 const isRateLimitCleared =
@@ -291,6 +355,8 @@ class UnifiedOpenAIScheduler {
             errorMsg = `Dedicated account ${boundAccount.name} is unauthorized`
           } else if (boundAccount.status === 'error') {
             errorMsg = `Dedicated account ${boundAccount.name} is not available (error status)`
+          } else if (accountType === 'github-copilot' && boundAccount.status !== 'active') {
+            errorMsg = `Dedicated account ${boundAccount.name} is not active`
           } else {
             errorMsg = `Dedicated account ${boundAccount.name} is not available (inactive or forbidden)`
           }
@@ -548,12 +614,20 @@ class UnifiedOpenAIScheduler {
     for (const account of githubCopilotAccounts) {
       if (
         (account.isActive === true || account.isActive === 'true') &&
-        account.status === 'active' &&
-        isSchedulable(account.schedulable)
+        isSchedulable(account.schedulable) &&
+        (account.status === 'active' || account.status === 'rateLimited')
       ) {
-        const isRateLimited = this._hasRateLimitFlag(account.rateLimitStatus)
-        if (isRateLimited) {
-          logger.debug(`⏭️ Skipping GitHub Copilot account ${account.name} - rate limited`)
+        const readiness = await this._ensureCopilotAccountReadyForScheduling(account, account.id, {
+          sanitized: true
+        })
+        if (!readiness.canUse) {
+          if (readiness.reason === 'rate_limited') {
+            logger.debug(`⏭️ Skipping GitHub Copilot account ${account.name} - rate limited`)
+          } else if (readiness.reason === 'not_schedulable') {
+            logger.debug(`⏭️ Skipping GitHub Copilot account ${account.name} - not schedulable`)
+          } else {
+            logger.debug(`⏭️ Skipping GitHub Copilot account ${account.name} - status not active`)
+          }
           continue
         }
 
@@ -658,14 +732,12 @@ class UnifiedOpenAIScheduler {
         return true
       } else if (accountType === 'github-copilot') {
         const account = await githubCopilotAccountService.getAccount(accountId)
-        if (
-          !account ||
-          (account.isActive !== true && account.isActive !== 'true') ||
-          account.status === 'error' ||
-          account.status === 'unauthorized' ||
-          !isSchedulable(account.schedulable) ||
-          this._hasRateLimitFlag(account.rateLimitStatus)
-        ) {
+        if (!this._isCopilotAccountActive(account)) {
+          return false
+        }
+
+        const isRateLimited = await this.isAccountRateLimited(accountId, accountType)
+        if (isRateLimited) {
           return false
         }
 
@@ -860,6 +932,16 @@ class UnifiedOpenAIScheduler {
           schedulable: 'true'
         })
         logger.info(`✅ Rate limit cleared for OpenAI-Responses account ${accountId}`)
+      } else if (accountType === 'github-copilot') {
+        await githubCopilotAccountService.updateAccount(accountId, {
+          rateLimitedAt: '',
+          rateLimitStatus: '',
+          rateLimitResetAt: '',
+          status: 'active',
+          errorMessage: '',
+          schedulable: 'true'
+        })
+        logger.info(`✅ Rate limit cleared for GitHub Copilot account ${accountId}`)
       }
 
       return { success: true }
@@ -873,8 +955,54 @@ class UnifiedOpenAIScheduler {
   }
 
   // 🔍 检查账户是否处于限流状态
-  async isAccountRateLimited(accountId) {
+  async isAccountRateLimited(accountId, accountType = 'openai') {
     try {
+      if (accountType === 'github-copilot') {
+        const account = await githubCopilotAccountService.getAccount(accountId)
+        if (!account) {
+          return false
+        }
+
+        if (!this._hasRateLimitFlag(account.rateLimitStatus)) {
+          return false
+        }
+
+        if (account.rateLimitResetAt) {
+          const resetTime = new Date(account.rateLimitResetAt).getTime()
+          const now = Date.now()
+          const isStillLimited = now < resetTime
+
+          if (!isStillLimited) {
+            logger.info(
+              `✅ Auto-clearing rate limit for GitHub Copilot account ${accountId} (reset time reached)`
+            )
+            await this.removeAccountRateLimit(accountId, accountType)
+            return false
+          }
+
+          return true
+        }
+
+        if (account.rateLimitedAt) {
+          const limitedAt = new Date(account.rateLimitedAt).getTime()
+          const now = Date.now()
+          const limitDuration = 60 * 60 * 1000
+          const isStillLimited = now < limitedAt + limitDuration
+
+          if (!isStillLimited) {
+            logger.info(
+              `✅ Auto-clearing rate limit for GitHub Copilot account ${accountId} (default duration reached)`
+            )
+            await this.removeAccountRateLimit(accountId, accountType)
+            return false
+          }
+
+          return true
+        }
+
+        return true
+      }
+
       const account = await openaiAccountService.getAccount(accountId)
       if (!account) {
         return false
