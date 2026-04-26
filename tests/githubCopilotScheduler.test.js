@@ -88,6 +88,20 @@ const buildCopilotAccount = (overrides = {}) => ({
   ...overrides
 })
 
+const buildResponsesAccount = (overrides = {}) => ({
+  id: 'responses-1',
+  name: 'Responses One',
+  isActive: 'true',
+  status: 'active',
+  schedulable: 'true',
+  priority: '30',
+  lastUsedAt: '0',
+  rateLimitStatus: '',
+  rateLimitedAt: '',
+  rateLimitResetAt: '',
+  ...overrides
+})
+
 describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
   beforeEach(() => {
     jest.clearAllMocks()
@@ -208,6 +222,104 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
       accountId: 'copilot-high-priority',
       accountType: 'github-copilot'
     })
+  })
+
+  test('bound openai-responses account clears rate limit before selection', async () => {
+    const { scheduler, openaiResponsesAccountService, githubCopilotAccountService } =
+      loadScheduler()
+
+    const refreshedAccount = buildResponsesAccount({
+      id: 'responses-limited',
+      name: 'Responses Limited',
+      rateLimitStatus: '',
+      schedulable: 'true'
+    })
+
+    openaiResponsesAccountService.getAccount
+      .mockResolvedValueOnce(
+        buildResponsesAccount({
+          id: 'responses-limited',
+          name: 'Responses Limited',
+          rateLimitStatus: 'limited',
+          schedulable: 'true'
+        })
+      )
+      .mockResolvedValueOnce(refreshedAccount)
+    openaiResponsesAccountService.checkAndClearRateLimit.mockResolvedValue(true)
+    openaiResponsesAccountService.recordUsage.mockResolvedValue({ success: true })
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Responses Key',
+        openaiAccountId: 'responses:responses-limited'
+      })
+    ).resolves.toEqual({
+      accountId: 'responses-limited',
+      accountType: 'openai-responses'
+    })
+
+    expect(openaiResponsesAccountService.checkAndClearRateLimit).toHaveBeenCalledWith(
+      'responses-limited'
+    )
+    expect(openaiResponsesAccountService.getAccount).toHaveBeenNthCalledWith(1, 'responses-limited')
+    expect(openaiResponsesAccountService.getAccount).toHaveBeenNthCalledWith(2, 'responses-limited')
+    expect(openaiResponsesAccountService.isSubscriptionExpired).toHaveBeenCalledWith(
+      refreshedAccount
+    )
+    expect(githubCopilotAccountService.getAccount).not.toHaveBeenCalled()
+  })
+
+  test('bound openai-responses account with expired subscription throws 403', async () => {
+    const { scheduler, openaiResponsesAccountService, githubCopilotAccountService } =
+      loadScheduler()
+
+    const account = buildResponsesAccount({
+      id: 'responses-expired',
+      name: 'Responses Expired'
+    })
+
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    openaiResponsesAccountService.isSubscriptionExpired.mockReturnValue(true)
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Responses Key',
+        openaiAccountId: 'responses:responses-expired'
+      })
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('subscription has expired')
+    })
+
+    expect(openaiResponsesAccountService.checkAndClearRateLimit).not.toHaveBeenCalled()
+    expect(githubCopilotAccountService.getAccount).not.toHaveBeenCalled()
+  })
+
+  test('bound openai-responses account with schedulable false throws 403', async () => {
+    const { scheduler, openaiResponsesAccountService, githubCopilotAccountService } =
+      loadScheduler()
+
+    const account = buildResponsesAccount({
+      id: 'responses-unschedulable',
+      name: 'Responses Unschedulable',
+      schedulable: 'false'
+    })
+
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Responses Key',
+        openaiAccountId: 'responses:responses-unschedulable'
+      })
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('not schedulable')
+    })
+
+    expect(openaiResponsesAccountService.checkAndClearRateLimit).not.toHaveBeenCalled()
+    expect(openaiResponsesAccountService.isSubscriptionExpired).not.toHaveBeenCalled()
+    expect(githubCopilotAccountService.getAccount).not.toHaveBeenCalled()
   })
 
   test('shared pool skips copilot account with status not equal to active', async () => {

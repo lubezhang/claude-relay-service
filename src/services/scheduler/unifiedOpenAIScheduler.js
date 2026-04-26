@@ -254,28 +254,7 @@ class UnifiedOpenAIScheduler {
                 error.statusCode = isRateLimited ? 429 : 403
                 throw error
               }
-            } else if (accountType === 'github-copilot') {
-              const readiness = await this._ensureCopilotAccountReadyForScheduling(
-                boundAccount,
-                boundAccount.id,
-                { sanitized: false }
-              )
-
-              if (!readiness.canUse) {
-                let errorMsg = `Dedicated account ${boundAccount.name} is not available`
-                if (readiness.reason === 'rate_limited') {
-                  errorMsg = `Dedicated account ${boundAccount.name} is currently rate limited`
-                } else if (readiness.reason === 'not_schedulable') {
-                  errorMsg = `Dedicated account ${boundAccount.name} is not schedulable`
-                } else if (readiness.reason === 'not_active') {
-                  errorMsg = `Dedicated account ${boundAccount.name} is not active`
-                }
-                logger.warn(`⚠️ ${errorMsg}`)
-                const error = new Error(errorMsg)
-                error.statusCode = 403
-                throw error
-              }
-
+            } else if (accountType === 'openai-responses') {
               const hasRateLimitFlag = this._isRateLimited(boundAccount.rateLimitStatus)
               if (hasRateLimitFlag) {
                 const isRateLimitCleared =
@@ -312,6 +291,27 @@ class UnifiedOpenAIScheduler {
                 logger.warn(`⚠️ ${errorMsg}`)
                 const error = new Error(errorMsg)
                 error.statusCode = 403 // Forbidden - 订阅已过期
+                throw error
+              }
+            } else if (accountType === 'github-copilot') {
+              const readiness = await this._ensureCopilotAccountReadyForScheduling(
+                boundAccount,
+                boundAccount.id,
+                { sanitized: false }
+              )
+
+              if (!readiness.canUse) {
+                let errorMsg = `Dedicated account ${boundAccount.name} is not available`
+                if (readiness.reason === 'rate_limited') {
+                  errorMsg = `Dedicated account ${boundAccount.name} is currently rate limited`
+                } else if (readiness.reason === 'not_schedulable') {
+                  errorMsg = `Dedicated account ${boundAccount.name} is not schedulable`
+                } else if (readiness.reason === 'not_active') {
+                  errorMsg = `Dedicated account ${boundAccount.name} is not active`
+                }
+                logger.warn(`⚠️ ${errorMsg}`)
+                const error = new Error(errorMsg)
+                error.statusCode = 403
                 throw error
               }
             }
