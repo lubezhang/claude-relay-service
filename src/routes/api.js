@@ -26,6 +26,7 @@ const {
   handleAnthropicMessagesToGemini,
   handleAnthropicCountTokensToGemini
 } = require('../services/anthropicGeminiBridgeService')
+const githubCopilotClaudeRelayService = require('../services/relay/githubCopilotClaudeRelayService')
 const router = express.Router()
 
 function queueRateLimitUpdate(
@@ -323,6 +324,10 @@ async function handleMessagesRequest(req, res) {
     if (forcedVendor === 'gemini-cli' || forcedVendor === 'antigravity') {
       const baseModel = (req.body.model || '').trim()
       return await handleAnthropicMessagesToGemini(req, res, { vendor: forcedVendor, baseModel })
+    }
+
+    if (req.apiKey?.openaiAccountId?.startsWith('copilot:')) {
+      return await githubCopilotClaudeRelayService.handleMessages(req, res, req.apiKey)
     }
 
     // 检查是否为流式请求
