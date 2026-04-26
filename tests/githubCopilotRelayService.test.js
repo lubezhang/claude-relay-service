@@ -349,6 +349,51 @@ describe('githubCopilotRelayService', () => {
     expect(destroySpy).toHaveBeenCalled()
   })
 
+  test('does not wait for non-stream usage recording before returning response', async () => {
+    githubCopilotAccountService.ensureCopilotToken.mockResolvedValue('copilot-token')
+    let releaseUsage
+    const usagePromise = new Promise((resolve) => {
+      releaseUsage = resolve
+    })
+    apiKeyService.recordUsageWithDetails.mockReturnValue(usagePromise)
+    axios.post.mockResolvedValue({
+      status: 200,
+      data: {
+        id: 'chatcmpl-pending-usage',
+        model: 'gpt-4o-mini',
+        choices: [],
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 2,
+          total_tokens: 7
+        }
+      }
+    })
+
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.path = '/v1/chat/completions'
+    req.originalUrl = '/openai/v1/chat/completions'
+    req.body = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [{ role: 'user', content: 'hello' }]
+    }
+
+    const res = createJsonResponse()
+
+    await relayService.handleRequest(req, res, { id: 'copilot-1' }, { id: 'key-1' })
+
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'chatcmpl-pending-usage' })
+    )
+    expect(apiKeyService.recordUsageWithDetails).toHaveBeenCalled()
+
+    releaseUsage({ totalTokens: 0, totalCost: 0 })
+    await usagePromise
+  })
+
   test('loads models from GitHub Copilot with Copilot authorization headers', async () => {
     githubCopilotAccountService.ensureCopilotToken.mockResolvedValue('copilot-token')
     axios.get.mockResolvedValue({
@@ -589,6 +634,57 @@ describe('openaiRoutes GitHub Copilot dispatch', () => {
       }
     })
     expect(githubCopilotRelayService.handleRequest).not.toHaveBeenCalled()
+    expect(axios.post).not.toHaveBeenCalled()
+  })
+
+  test('allows unified chat completions converted to Responses when original chat body is available', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+      accountId: 'copilot-1',
+      accountType: 'github-copilot'
+    })
+    githubCopilotAccountService.getAccount.mockResolvedValue({
+      id: 'copilot-1',
+      name: 'Copilot Account'
+    })
+    githubCopilotRelayService.handleRequest.mockResolvedValue({ ok: true })
+
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.path = '/v1/responses'
+    req.originalUrl = '/openai/v1/chat/completions'
+    req.headers = { 'user-agent': 'client/1.0' }
+    req.body = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+      instructions: 'codex instructions'
+    }
+    req._openAIChatCompletionsBody = {
+      model: 'gpt-4o-mini',
+      stream: false,
+      messages: [{ role: 'user', content: 'hello' }]
+    }
+    req.apiKey = {
+      id: 'key-1',
+      permissions: ['openai'],
+      enableOpenAIResponsesCodexAdaptation: false,
+      enableOpenAIResponsesPayloadRules: false,
+      openaiResponsesPayloadRules: []
+    }
+    req._fromUnifiedEndpoint = true
+
+    const res = createJsonResponse()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(res.status).not.toHaveBeenCalledWith(400)
+    expect(req.body).toEqual(req._openAIChatCompletionsBody)
+    expect(githubCopilotRelayService.handleRequest).toHaveBeenCalledWith(
+      req,
+      res,
+      expect.objectContaining({ id: 'copilot-1' }),
+      req.apiKey
+    )
     expect(axios.post).not.toHaveBeenCalled()
   })
 

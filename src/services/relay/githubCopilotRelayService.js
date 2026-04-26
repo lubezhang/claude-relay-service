@@ -79,8 +79,9 @@ class GithubCopilotRelayService {
       }
 
       removeClientListeners()
-      await this._recordNonStreamUsage(upstream, req, account, apiKeyData)
-      return res.status(upstream.status).json(upstream.data)
+      const response = res.status(upstream.status).json(upstream.data)
+      this._recordNonStreamUsage(upstream, req, account, apiKeyData)
+      return response
     } catch (error) {
       removeClientListeners()
       logger.error('GitHub Copilot relay request failed:', sanitizeError(error))

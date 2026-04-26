@@ -124,6 +124,19 @@ function isChatCompletionsPayload(body = {}) {
   return Array.isArray(body?.messages)
 }
 
+function getOriginalChatCompletionsBody(req) {
+  const candidates = [
+    req?._openAIChatCompletionsBody,
+    req?._openaiChatCompletionsBody,
+    req?._originalChatCompletionsBody,
+    req?._originalOpenAIChatCompletionsBody,
+    req?._originalBody,
+    req?.originalBody
+  ]
+
+  return candidates.find((body) => isChatCompletionsPayload(body)) || null
+}
+
 function applyCodexCliAdaptation(body = {}) {
   const fieldsToRemove = [
     'temperature',
@@ -416,14 +429,19 @@ const handleResponses = async (req, res) => {
     }
 
     if (accountType === 'github-copilot') {
+      const originalChatBody = getOriginalChatCompletionsBody(req)
       if (!isChatCompletionsPayload(req.body)) {
-        return res.status(400).json({
-          error: {
-            message: 'GitHub Copilot relay only supports OpenAI chat completions payloads',
-            type: 'unsupported_request',
-            code: 'unsupported_request'
-          }
-        })
+        if (req._fromUnifiedEndpoint && originalChatBody) {
+          req.body = originalChatBody
+        } else {
+          return res.status(400).json({
+            error: {
+              message: 'GitHub Copilot relay only supports OpenAI chat completions payloads',
+              type: 'unsupported_request',
+              code: 'unsupported_request'
+            }
+          })
+        }
       }
 
       logger.info(`🔀 Using GitHub Copilot relay service for account: ${account.name}`)
