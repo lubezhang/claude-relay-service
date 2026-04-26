@@ -127,6 +127,37 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
     )
   })
 
+  test('bound copilot temp unavailable throws and does not fall back to shared pool', async () => {
+    const {
+      scheduler,
+      openaiAccountService,
+      openaiResponsesAccountService,
+      githubCopilotAccountService,
+      upstreamErrorHelper
+    } = loadScheduler()
+
+    openaiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
+    githubCopilotAccountService.getAccount.mockResolvedValue(buildCopilotAccount())
+    githubCopilotAccountService.getAllAccounts.mockResolvedValue([
+      buildCopilotAccount({ id: 'copilot-shared', name: 'Fallback Copilot', priority: '1' })
+    ])
+    upstreamErrorHelper.isTempUnavailable.mockResolvedValue(true)
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Temp Unavailable Copilot Key',
+        openaiAccountId: 'copilot:copilot-1'
+      })
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('temporarily unavailable')
+    })
+
+    expect(githubCopilotAccountService.getAllAccounts).not.toHaveBeenCalled()
+    expect(githubCopilotAccountService.updateAccount).not.toHaveBeenCalled()
+  })
+
   test('selectAccountForApiKey includes schedulable GitHub Copilot accounts in the shared pool', async () => {
     const {
       scheduler,
@@ -154,11 +185,43 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
     expect(githubCopilotAccountService.getAllAccounts).toHaveBeenCalledWith(true)
   })
 
+  test('shared pool skips copilot account with status not equal to active', async () => {
+    const {
+      scheduler,
+      openaiAccountService,
+      openaiResponsesAccountService,
+      githubCopilotAccountService
+    } = loadScheduler()
+
+    openaiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
+    githubCopilotAccountService.getAllAccounts.mockResolvedValue([
+      buildCopilotAccount({ id: 'copilot-paused', status: 'paused' })
+    ])
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Shared Pool Key'
+      })
+    ).rejects.toMatchObject({
+      statusCode: 402,
+      message: 'No available OpenAI accounts'
+    })
+
+    expect(githubCopilotAccountService.updateAccount).not.toHaveBeenCalled()
+  })
+
   test.each([
     ['missing account', null, 404, 'not found'],
     ['inactive account', buildCopilotAccount({ isActive: 'false' }), 403, 'not active'],
     ['unauthorized account', buildCopilotAccount({ status: 'unauthorized' }), 403, 'unauthorized'],
     ['error account', buildCopilotAccount({ status: 'error' }), 403, 'not available'],
+    [
+      'rate-limited account',
+      buildCopilotAccount({ rateLimitStatus: 'limited' }),
+      403,
+      'currently rate limited'
+    ],
     [
       'not schedulable account',
       buildCopilotAccount({ schedulable: 'false' }),

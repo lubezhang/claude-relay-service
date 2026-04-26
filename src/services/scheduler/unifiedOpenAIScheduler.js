@@ -164,6 +164,14 @@ class UnifiedOpenAIScheduler {
             accountType
           )
           if (isTempUnavailable) {
+            if (accountType === 'github-copilot') {
+              const errorMsg = `Dedicated account ${boundAccount.name} is temporarily unavailable`
+              logger.warn(`⚠️ ${errorMsg}`)
+              const error = new Error(errorMsg)
+              error.statusCode = 403
+              throw error
+            }
+
             logger.warn(
               `⏱️ Bound ${accountType} account ${boundAccount.name} temporarily unavailable, falling back to pool`
             )
@@ -200,7 +208,7 @@ class UnifiedOpenAIScheduler {
                 const errorMsg = `Dedicated account ${boundAccount.name} is currently rate limited`
                 logger.warn(`⚠️ ${errorMsg}`)
                 const error = new Error(errorMsg)
-                error.statusCode = 429
+                error.statusCode = 403
                 throw error
               }
             } else {
@@ -540,8 +548,7 @@ class UnifiedOpenAIScheduler {
     for (const account of githubCopilotAccounts) {
       if (
         (account.isActive === true || account.isActive === 'true') &&
-        account.status !== 'error' &&
-        account.status !== 'unauthorized' &&
+        account.status === 'active' &&
         isSchedulable(account.schedulable)
       ) {
         const isRateLimited = this._hasRateLimitFlag(account.rateLimitStatus)
