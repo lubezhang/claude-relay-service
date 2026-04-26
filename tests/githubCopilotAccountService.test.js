@@ -1,5 +1,7 @@
 const mockStored = new Map()
 const mockIndex = new Set()
+const mockProxyAgent = { name: 'proxy-agent' }
+const mockCreateProxyAgent = jest.fn(() => mockProxyAgent)
 
 jest.mock('axios', () => ({
   post: jest.fn(),
@@ -29,6 +31,10 @@ jest.mock('../src/utils/logger', () => ({
   success: jest.fn()
 }))
 
+jest.mock('../src/utils/proxyHelper', () => ({
+  createProxyAgent: (...args) => mockCreateProxyAgent(...args)
+}))
+
 jest.mock(
   '../config/config',
   () => ({
@@ -40,12 +46,18 @@ jest.mock(
 
 let axios
 
+const getStoredAccountRecord = (id) => {
+  return mockStored.get(`github_copilot_account:${id}`)
+}
+
 describe('githubCopilotAccountService', () => {
   beforeEach(() => {
     jest.resetModules()
     axios = require('axios')
     mockStored.clear()
     mockIndex.clear()
+    mockCreateProxyAgent.mockReset()
+    mockCreateProxyAgent.mockReturnValue(mockProxyAgent)
     axios.post.mockReset()
     axios.get.mockReset()
   })
@@ -106,6 +118,134 @@ describe('githubCopilotAccountService', () => {
         headers: expect.objectContaining({ authorization: 'token ghu_secret' })
       })
     )
+  })
+
+  test('ensureCopilotToken applies proxy agent when account has proxy', async () => {
+    axios.get.mockResolvedValueOnce({
+      data: {
+        token: 'fresh_token',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        refresh_in: 1800
+      }
+    })
+
+    const service = require('../src/services/account/githubCopilotAccountService')
+    const proxy = {
+      type: 'http',
+      host: '127.0.0.1',
+      port: 7890
+    }
+    const created = await service.createAccount({
+      name: 'copilot-proxy',
+      githubToken: 'ghu_secret',
+      copilotToken: 'old_token',
+      copilotTokenExpiresAt: '2000-01-01T00:00:00.000Z',
+      proxy
+    })
+
+    await expect(service.ensureCopilotToken(created.id)).resolves.toBe('fresh_token')
+    expect(mockCreateProxyAgent).toHaveBeenCalledWith(proxy)
+    expect(axios.get).toHaveBeenCalledWith(
+      'https://api.github.com/copilot_internal/v2/token',
+      expect.objectContaining({
+        httpAgent: mockProxyAgent,
+        httpsAgent: mockProxyAgent,
+        proxy: false
+      })
+    )
+  })
+
+  test('ensureCopilotToken refreshes expired token only once for concurrent calls', async () => {
+    let resolveRefresh
+    axios.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve
+        })
+    )
+
+    const service = require('../src/services/account/githubCopilotAccountService')
+    const created = await service.createAccount({
+      name: 'copilot-main',
+      githubToken: 'ghu_secret',
+      copilotToken: 'old_token',
+      copilotTokenExpiresAt: '2000-01-01T00:00:00.000Z'
+    })
+
+    const firstPromise = service.ensureCopilotToken(created.id)
+    const secondPromise = service.ensureCopilotToken(created.id)
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(axios.get).toHaveBeenCalledTimes(1)
+
+    resolveRefresh({
+      data: {
+        token: 'fresh_token',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        refresh_in: 1800
+      }
+    })
+
+    await expect(Promise.all([firstPromise, secondPromise])).resolves.toEqual([
+      'fresh_token',
+      'fresh_token'
+    ])
+    expect(service._refreshPromises.size).toBe(0)
+  })
+
+  test('ensureCopilotToken keeps refreshed token encrypted in storage', async () => {
+    axios.get.mockResolvedValueOnce({
+      data: {
+        token: 'fresh_token',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        refresh_in: 1800
+      }
+    })
+
+    const service = require('../src/services/account/githubCopilotAccountService')
+    const created = await service.createAccount({
+      name: 'copilot-main',
+      githubToken: 'ghu_secret',
+      copilotToken: 'old_token',
+      copilotTokenExpiresAt: '2000-01-01T00:00:00.000Z'
+    })
+
+    await expect(service.ensureCopilotToken(created.id)).resolves.toBe('fresh_token')
+
+    const raw = getStoredAccountRecord(created.id)
+    expect(raw.copilotToken).toBeTruthy()
+    expect(raw.copilotToken).not.toBe('fresh_token')
+
+    const reloaded = await service.getAccount(created.id)
+    expect(reloaded.copilotToken).toBe('fresh_token')
+  })
+
+  test('getAllAccounts(true) preserves proxy structure after sanitization', async () => {
+    const service = require('../src/services/account/githubCopilotAccountService')
+    const proxy = {
+      type: 'http',
+      host: '127.0.0.1',
+      port: 7890,
+      username: 'user',
+      password: 'pass'
+    }
+
+    await service.createAccount({
+      name: 'copilot-proxy',
+      githubToken: 'ghu_secret',
+      copilotToken: 'copilot_secret',
+      copilotTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      proxy
+    })
+
+    const accounts = await service.getAllAccounts(true)
+
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0].proxy).toEqual(proxy)
+    expect(accounts[0].githubToken).toBe('***')
+    expect(accounts[0].copilotToken).toBe('***')
   })
 
   test('ensureCopilotToken marks account unauthorized when GitHub refresh returns 401', async () => {

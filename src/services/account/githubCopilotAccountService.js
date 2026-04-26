@@ -4,6 +4,7 @@ const axios = require('axios')
 
 const redis = require('../../models/redis')
 const logger = require('../../utils/logger')
+const ProxyHelper = require('../../utils/proxyHelper')
 const config = require('../../../config/config')
 const {
   GITHUB_API_BASE_URL,
@@ -21,6 +22,7 @@ class GithubCopilotAccountService {
     this.ACCOUNT_KEY_PREFIX = 'github_copilot_account:'
     this.SHARED_ACCOUNTS_KEY = 'shared_github_copilot_accounts'
     this.ACCOUNT_INDEX_KEY = 'github_copilot_account:index'
+    this._refreshPromises = new Map()
   }
 
   async createAccount(options = {}) {
@@ -169,6 +171,11 @@ class GithubCopilotAccountService {
   }
 
   async ensureCopilotToken(accountId) {
+    const pendingRefresh = this._refreshPromises.get(accountId)
+    if (pendingRefresh) {
+      return pendingRefresh
+    }
+
     const account = await this.getAccount(accountId)
     if (!account) {
       throw new Error('GitHub Copilot account not found')
@@ -178,54 +185,23 @@ class GithubCopilotAccountService {
       return account.copilotToken
     }
 
+    const existingRefresh = this._refreshPromises.get(accountId)
+    if (existingRefresh) {
+      return existingRefresh
+    }
+
     if (!account.githubToken) {
       throw new Error('GitHub token is missing for GitHub Copilot account')
     }
 
-    let response
+    const refreshPromise = this._refreshCopilotToken(accountId, account)
+    this._refreshPromises.set(accountId, refreshPromise)
+
     try {
-      response = await axios.get(`${GITHUB_API_BASE_URL}/copilot_internal/v2/token`, {
-        headers: buildGitHubHeaders(account.githubToken),
-        timeout: config.requestTimeout || 600000
-      })
-    } catch (error) {
-      const status = error?.response?.status
-      if (status === 401 || status === 403) {
-        await this.updateAccount(accountId, {
-          status: 'unauthorized',
-          schedulable: false,
-          errorMessage: 'GitHub Copilot authorization failed'
-        })
-        throw new Error('GitHub Copilot authorization failed')
-      }
-      throw error
+      return await refreshPromise
+    } finally {
+      this._refreshPromises.delete(accountId)
     }
-
-    if (response?.status === 401 || response?.status === 403) {
-      await this.updateAccount(accountId, {
-        status: 'unauthorized',
-        schedulable: false,
-        errorMessage: 'GitHub Copilot authorization failed'
-      })
-      throw new Error('GitHub Copilot authorization failed')
-    }
-
-    if (!response?.data?.token) {
-      throw new Error('GitHub Copilot token refresh returned no token')
-    }
-
-    const expiresAt = this._normalizeCopilotExpiry(response.data.expires_at)
-
-    await this.updateAccount(accountId, {
-      copilotToken: response.data.token,
-      copilotTokenExpiresAt: expiresAt,
-      copilotTokenRefreshIn: response.data.refresh_in || 0,
-      status: 'active',
-      schedulable: true,
-      errorMessage: ''
-    })
-
-    return response.data.token
   }
 
   async startDeviceAuthorization() {
@@ -285,12 +261,82 @@ class GithubCopilotAccountService {
     await redis.addToIndex(this.ACCOUNT_INDEX_KEY, accountId)
   }
 
+  async _refreshCopilotToken(accountId, account) {
+    let response
+    try {
+      response = await axios.get(
+        `${GITHUB_API_BASE_URL}/copilot_internal/v2/token`,
+        this._buildCopilotTokenRequestConfig(account)
+      )
+    } catch (error) {
+      const status = error?.response?.status
+      if (status === 401 || status === 403) {
+        await this.updateAccount(accountId, {
+          status: 'unauthorized',
+          schedulable: false,
+          errorMessage: 'GitHub Copilot authorization failed'
+        })
+        throw new Error('GitHub Copilot authorization failed')
+      }
+      throw error
+    }
+
+    if (response?.status === 401 || response?.status === 403) {
+      await this.updateAccount(accountId, {
+        status: 'unauthorized',
+        schedulable: false,
+        errorMessage: 'GitHub Copilot authorization failed'
+      })
+      throw new Error('GitHub Copilot authorization failed')
+    }
+
+    if (!response?.data?.token) {
+      throw new Error('GitHub Copilot token refresh returned no token')
+    }
+
+    const expiresAt = this._normalizeCopilotExpiry(response.data.expires_at)
+
+    await this.updateAccount(accountId, {
+      copilotToken: response.data.token,
+      copilotTokenExpiresAt: expiresAt,
+      copilotTokenRefreshIn: response.data.refresh_in || 0,
+      status: 'active',
+      schedulable: true,
+      errorMessage: ''
+    })
+
+    return response.data.token
+  }
+
+  _buildCopilotTokenRequestConfig(account) {
+    const requestConfig = {
+      headers: buildGitHubHeaders(account.githubToken),
+      timeout: config.requestTimeout || 600000
+    }
+
+    if (!account.proxy) {
+      return requestConfig
+    }
+
+    const proxyAgent = ProxyHelper.createProxyAgent(account.proxy)
+    if (!proxyAgent) {
+      return requestConfig
+    }
+
+    return {
+      ...requestConfig,
+      httpAgent: proxyAgent,
+      httpsAgent: proxyAgent,
+      proxy: false
+    }
+  }
+
   _deserializeAccount(accountData) {
     const account = { ...accountData }
     account.githubToken = this._decryptSensitiveData(account.githubToken)
     account.copilotToken = this._decryptSensitiveData(account.copilotToken)
 
-    if (account.proxy) {
+    if (typeof account.proxy === 'string' && account.proxy) {
       try {
         account.proxy = JSON.parse(account.proxy)
       } catch (_error) {
