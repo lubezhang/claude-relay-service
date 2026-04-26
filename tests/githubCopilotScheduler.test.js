@@ -305,6 +305,41 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
 
     expect(mockRedisClient.del).toHaveBeenCalledWith('unified_openai_session_mapping:session-1')
   })
+
+  test('sticky mapped copilot active but schedulable false is unavailable and mapping deleted', async () => {
+    const {
+      scheduler,
+      openaiAccountService,
+      openaiResponsesAccountService,
+      githubCopilotAccountService
+    } = loadScheduler()
+
+    mockRedisClient.get.mockResolvedValue(
+      JSON.stringify({ accountId: 'copilot-1', accountType: 'github-copilot' })
+    )
+    githubCopilotAccountService.getAccount.mockResolvedValue(
+      buildCopilotAccount({ schedulable: 'false' })
+    )
+    openaiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
+    githubCopilotAccountService.getAllAccounts.mockResolvedValue([])
+
+    await expect(
+      scheduler.selectAccountForApiKey(
+        {
+          name: 'Sticky Key'
+        },
+        'session-1'
+      )
+    ).rejects.toMatchObject({
+      statusCode: 402,
+      message: 'No available OpenAI accounts'
+    })
+
+    expect(mockRedisClient.del).toHaveBeenCalledWith('unified_openai_session_mapping:session-1')
+    expect(githubCopilotAccountService.updateAccount).not.toHaveBeenCalled()
+  })
+
   test('copilot rate limit reset expired clears limited state and restores scheduling', async () => {
     const { scheduler, githubCopilotAccountService } = loadScheduler()
 
@@ -322,6 +357,59 @@ describe('unifiedOpenAIScheduler GitHub Copilot support', () => {
     await expect(scheduler.isAccountRateLimited('copilot-1', 'github-copilot')).resolves.toBe(false)
 
     expect(githubCopilotAccountService.updateAccount).toHaveBeenCalledWith('copilot-1', {
+      rateLimitedAt: '',
+      rateLimitStatus: '',
+      rateLimitResetAt: '',
+      status: 'active',
+      errorMessage: '',
+      schedulable: 'true'
+    })
+  })
+
+  test('shared pool restores and selects rate-limited copilot account with schedulable false when reset expired', async () => {
+    const {
+      scheduler,
+      openaiAccountService,
+      openaiResponsesAccountService,
+      githubCopilotAccountService
+    } = loadScheduler()
+
+    openaiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
+    githubCopilotAccountService.getAllAccounts.mockResolvedValue([
+      buildCopilotAccount({
+        id: 'copilot-restored',
+        schedulable: 'false',
+        status: 'rateLimited',
+        rateLimitStatus: 'limited',
+        rateLimitedAt: new Date(Date.now() - 3600000).toISOString(),
+        rateLimitResetAt: new Date(Date.now() - 60000).toISOString(),
+        priority: '5'
+      })
+    ])
+    githubCopilotAccountService.getAccount.mockResolvedValue(
+      buildCopilotAccount({
+        id: 'copilot-restored',
+        schedulable: 'false',
+        status: 'rateLimited',
+        rateLimitStatus: 'limited',
+        rateLimitedAt: new Date(Date.now() - 3600000).toISOString(),
+        rateLimitResetAt: new Date(Date.now() - 60000).toISOString(),
+        priority: '5'
+      })
+    )
+    githubCopilotAccountService.updateAccount.mockResolvedValue({ success: true })
+
+    await expect(
+      scheduler.selectAccountForApiKey({
+        name: 'Recovered Shared Pool Key'
+      })
+    ).resolves.toEqual({
+      accountId: 'copilot-restored',
+      accountType: 'github-copilot'
+    })
+
+    expect(githubCopilotAccountService.updateAccount).toHaveBeenCalledWith('copilot-restored', {
       rateLimitedAt: '',
       rateLimitStatus: '',
       rateLimitResetAt: '',

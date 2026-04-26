@@ -612,10 +612,15 @@ class UnifiedOpenAIScheduler {
 
     const githubCopilotAccounts = await githubCopilotAccountService.getAllAccounts(true)
     for (const account of githubCopilotAccounts) {
+      const isActive = account.isActive === true || account.isActive === 'true'
+      const schedulable = isSchedulable(account.schedulable)
+      const canRecoverRateLimitedAccount =
+        account.status === 'rateLimited' && this._hasRateLimitFlag(account.rateLimitStatus)
+
       if (
-        (account.isActive === true || account.isActive === 'true') &&
-        isSchedulable(account.schedulable) &&
-        (account.status === 'active' || account.status === 'rateLimited')
+        isActive &&
+        (account.status === 'active' || account.status === 'rateLimited') &&
+        (schedulable || canRecoverRateLimitedAccount)
       ) {
         const readiness = await this._ensureCopilotAccountReadyForScheduling(account, account.id, {
           sanitized: true
@@ -733,6 +738,11 @@ class UnifiedOpenAIScheduler {
       } else if (accountType === 'github-copilot') {
         const account = await githubCopilotAccountService.getAccount(accountId)
         if (!this._isCopilotAccountActive(account)) {
+          return false
+        }
+
+        if (!isSchedulable(account.schedulable)) {
+          logger.info(`🚫 GitHub Copilot account ${accountId} is not schedulable`)
           return false
         }
 
