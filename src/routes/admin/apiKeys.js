@@ -67,6 +67,20 @@ function validateServiceRates(serviceRates) {
   return null
 }
 
+function preserveAccountBindingId(accountId) {
+  if (accountId === undefined) {
+    return undefined
+  }
+  return accountId || ''
+}
+
+function getBindingCountKey(accountId) {
+  if (!accountId) {
+    return null
+  }
+  return String(accountId)
+}
+
 // 👥 用户管理 (用于API Key分配)
 
 // 获取所有用户列表（用于API Key分配）
@@ -884,50 +898,50 @@ router.get('/accounts/binding-counts', authenticateAdmin, async (req, res) => {
     for (const key of apiKeys) {
       // Claude 账户
       if (key.claudeAccountId) {
-        const id = key.claudeAccountId
+        const id = getBindingCountKey(key.claudeAccountId)
         bindingCounts.claudeAccountId[id] = (bindingCounts.claudeAccountId[id] || 0) + 1
       }
 
       // Claude Console 账户
       if (key.claudeConsoleAccountId) {
-        const id = key.claudeConsoleAccountId
+        const id = getBindingCountKey(key.claudeConsoleAccountId)
         bindingCounts.claudeConsoleAccountId[id] =
           (bindingCounts.claudeConsoleAccountId[id] || 0) + 1
       }
 
       // Gemini 账户（包括 api: 前缀的 Gemini-API 账户）
       if (key.geminiAccountId) {
-        const id = key.geminiAccountId
+        const id = getBindingCountKey(key.geminiAccountId)
         bindingCounts.geminiAccountId[id] = (bindingCounts.geminiAccountId[id] || 0) + 1
       }
 
-      // OpenAI 账户（包括 responses: 前缀的 OpenAI-Responses 账户）
+      // OpenAI 账户（包括 responses: 前缀的 OpenAI-Responses 账户和 copilot: 前缀的 GitHub Copilot 账户）
       if (key.openaiAccountId) {
-        const id = key.openaiAccountId
+        const id = getBindingCountKey(key.openaiAccountId)
         bindingCounts.openaiAccountId[id] = (bindingCounts.openaiAccountId[id] || 0) + 1
       }
 
       // Azure OpenAI 账户
       if (key.azureOpenaiAccountId) {
-        const id = key.azureOpenaiAccountId
+        const id = getBindingCountKey(key.azureOpenaiAccountId)
         bindingCounts.azureOpenaiAccountId[id] = (bindingCounts.azureOpenaiAccountId[id] || 0) + 1
       }
 
       // Bedrock 账户
       if (key.bedrockAccountId) {
-        const id = key.bedrockAccountId
+        const id = getBindingCountKey(key.bedrockAccountId)
         bindingCounts.bedrockAccountId[id] = (bindingCounts.bedrockAccountId[id] || 0) + 1
       }
 
       // Droid 账户
       if (key.droidAccountId) {
-        const id = key.droidAccountId
+        const id = getBindingCountKey(key.droidAccountId)
         bindingCounts.droidAccountId[id] = (bindingCounts.droidAccountId[id] || 0) + 1
       }
 
       // CCR 账户
       if (key.ccrAccountId) {
-        const id = key.ccrAccountId
+        const id = getBindingCountKey(key.ccrAccountId)
         bindingCounts.ccrAccountId[id] = (bindingCounts.ccrAccountId[id] || 0) + 1
       }
     }
@@ -1677,7 +1691,7 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
       claudeAccountId,
       claudeConsoleAccountId,
       geminiAccountId,
-      openaiAccountId,
+      openaiAccountId: preserveAccountBindingId(openaiAccountId),
       bedrockAccountId,
       droidAccountId,
       permissions,
@@ -1800,7 +1814,7 @@ router.post('/api-keys/batch', authenticateAdmin, async (req, res) => {
           claudeAccountId,
           claudeConsoleAccountId,
           geminiAccountId,
-          openaiAccountId,
+          openaiAccountId: preserveAccountBindingId(openaiAccountId),
           bedrockAccountId,
           droidAccountId,
           permissions,
@@ -1997,7 +2011,7 @@ router.put('/api-keys/batch', authenticateAdmin, async (req, res) => {
           finalUpdates.geminiAccountId = updates.geminiAccountId
         }
         if (updates.openaiAccountId !== undefined) {
-          finalUpdates.openaiAccountId = updates.openaiAccountId
+          finalUpdates.openaiAccountId = preserveAccountBindingId(updates.openaiAccountId)
         }
         if (updates.bedrockAccountId !== undefined) {
           finalUpdates.bedrockAccountId = updates.bedrockAccountId
@@ -2197,7 +2211,7 @@ router.put('/api-keys/:keyId', authenticateAdmin, async (req, res) => {
 
     if (openaiAccountId !== undefined) {
       // 空字符串表示解绑，null或空字符串都设置为空字符串
-      updates.openaiAccountId = openaiAccountId || ''
+      updates.openaiAccountId = preserveAccountBindingId(openaiAccountId)
     }
 
     if (bedrockAccountId !== undefined) {

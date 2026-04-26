@@ -14,6 +14,7 @@ const ACCOUNT_TYPE_CONFIG = {
   'claude-console': { prefix: 'claude_console_account:' },
   openai: { prefix: 'openai:account:' },
   'openai-responses': { prefix: 'openai_responses_account:' },
+  'github-copilot': { prefix: 'github_copilot_account:' },
   'azure-openai': { prefix: 'azure_openai:account:' },
   gemini: { prefix: 'gemini_account:' },
   'gemini-api': { prefix: 'gemini_api_account:' },
@@ -23,6 +24,7 @@ const ACCOUNT_TYPE_CONFIG = {
 const ACCOUNT_TYPE_PRIORITY = [
   'openai',
   'openai-responses',
+  'github-copilot',
   'azure-openai',
   'claude',
   'claude-console',
@@ -36,6 +38,7 @@ const ACCOUNT_CATEGORY_MAP = {
   'claude-console': 'claude',
   openai: 'openai',
   'openai-responses': 'openai',
+  'github-copilot': 'openai',
   'azure-openai': 'openai',
   gemini: 'gemini',
   'gemini-api': 'gemini',
@@ -105,6 +108,13 @@ function normalizeAccountTypeKey(type) {
   if (lower === 'openai_responses' || lower === 'openai-response' || lower === 'openai-responses') {
     return 'openai-responses'
   }
+  if (
+    lower === 'github_copilot' ||
+    lower === 'github-copilot' ||
+    lower === 'copilot'
+  ) {
+    return 'github-copilot'
+  }
   if (lower === 'azure_openai' || lower === 'azureopenai' || lower === 'azure-openai') {
     return 'azure-openai'
   }
@@ -120,6 +130,9 @@ function sanitizeAccountIdForType(accountId, accountType) {
   }
   if (accountType === 'openai-responses') {
     return accountId.replace(/^responses:/, '')
+  }
+  if (accountType === 'github-copilot') {
+    return accountId.replace(/^copilot:/, '')
   }
   if (accountType === 'gemini-api') {
     return accountId.replace(/^api:/, '')
@@ -2219,6 +2232,9 @@ class ApiKeyService {
       if (typeof rawAccountId === 'string' && rawAccountId.startsWith('responses:')) {
         candidateIds.add(rawAccountId.replace(/^responses:/, ''))
       }
+      if (typeof rawAccountId === 'string' && rawAccountId.startsWith('copilot:')) {
+        candidateIds.add(rawAccountId.replace(/^copilot:/, ''))
+      }
       if (typeof rawAccountId === 'string' && rawAccountId.startsWith('api:')) {
         candidateIds.add(rawAccountId.replace(/^api:/, ''))
       }
@@ -2603,6 +2619,7 @@ class ApiKeyService {
         'gemini-api': 'geminiAccountId', // 特殊处理，带 api: 前缀
         openai: 'openaiAccountId',
         'openai-responses': 'openaiAccountId', // 特殊处理，带 responses: 前缀
+        'github-copilot': 'openaiAccountId', // 特殊处理，带 copilot: 前缀
         azure_openai: 'azureOpenaiAccountId',
         bedrock: 'bedrockAccountId',
         droid: 'droidAccountId',
@@ -2623,6 +2640,9 @@ class ApiKeyService {
       if (accountType === 'openai-responses') {
         // OpenAI-Responses 特殊处理：查找 openaiAccountId 字段中带 responses: 前缀的
         boundKeys = allKeys.filter((key) => key.openaiAccountId === `responses:${accountId}`)
+      } else if (accountType === 'github-copilot') {
+        // GitHub Copilot 特殊处理：查找 openaiAccountId 字段中带 copilot: 前缀的
+        boundKeys = allKeys.filter((key) => key.openaiAccountId === `copilot:${accountId}`)
       } else if (accountType === 'gemini-api') {
         // Gemini-API 特殊处理：查找 geminiAccountId 字段中带 api: 前缀的
         boundKeys = allKeys.filter((key) => key.geminiAccountId === `api:${accountId}`)
@@ -2852,5 +2872,12 @@ apiKeyService.recordUsageMetrics = apiKeyService.recordUsage.bind(apiKeyService)
 // 导出权限辅助函数供路由使用
 apiKeyService.hasPermission = hasPermission
 apiKeyService.normalizePermissions = normalizePermissions
+apiKeyService._testOnly = {
+  ACCOUNT_TYPE_CONFIG,
+  ACCOUNT_TYPE_PRIORITY,
+  ACCOUNT_CATEGORY_MAP,
+  normalizeAccountTypeKey,
+  sanitizeAccountIdForType
+}
 
 module.exports = apiKeyService
