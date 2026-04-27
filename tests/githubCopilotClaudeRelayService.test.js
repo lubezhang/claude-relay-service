@@ -65,6 +65,21 @@ describe('githubCopilotClaudeRelayService', () => {
       handleRequest: jest.fn()
     }))
 
+    jest.doMock('../src/services/apiKeyService', () => ({
+      recordUsageWithDetails: jest.fn(async () => ({ totalTokens: 6, totalCost: 0.0001 }))
+    }))
+
+    jest.doMock('../src/utils/rateLimitHelper', () => ({
+      updateRateLimitCounters: jest.fn(async () => ({ totalTokens: 6, totalCost: 0.0001 }))
+    }))
+
+    jest.doMock('../src/utils/requestDetailHelper', () => ({
+      createRequestDetailMeta: jest.fn(() => ({ requestId: 'detail-1' })),
+      extractOpenAICacheReadTokens: jest.fn(
+        (usage = {}) => usage.prompt_tokens_details?.cached_tokens || 0
+      )
+    }))
+
     jest.doMock('../src/utils/logger', () => ({
       debug: jest.fn(),
       info: jest.fn(),
@@ -333,6 +348,256 @@ describe('githubCopilotClaudeRelayService', () => {
         output_tokens: 3
       }
     })
+  })
+
+
+  test('buffers split OpenAI SSE JSON chunks before translating to Anthropic events', async () => {
+    githubCopilotAccountService.getAccount.mockResolvedValue({
+      id: 'copilot-1',
+      name: 'Copilot 1',
+      accountType: 'individual'
+    })
+
+    githubCopilotRelayService.handleRequest.mockImplementation(async (_openAIReq, captureRes) => {
+      captureRes.status(200)
+      captureRes.setHeader('Content-Type', 'text/event-stream')
+      captureRes.write(
+        'data: {"id":"chatcmpl-1","model":"gpt-4.1","choices":[{"delta":{"role":"assistant"}'
+      )
+      captureRes.write('}]}\n\n')
+      captureRes.write(
+        'data: {"id":"chatcmpl-1","model":"gpt-4.1","choices":[{"delta":{"content":"hello"}}]}\n\n'
+      )
+      captureRes.write(
+        'data: {"id":"chatcmpl-1","model":"gpt-4.1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":4}}\n\n'
+      )
+      captureRes.end('data: [DONE]\n\n')
+    })
+
+    const req = createRequest(
+      {
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Ping' }] }],
+        stream: true
+      },
+      {
+        id: 'key-1',
+        openaiAccountId: 'copilot:copilot-1'
+      }
+    )
+    const res = createJsonResponse()
+
+    await expect(
+      githubCopilotClaudeRelayService.handleMessages(req, res, req.apiKey)
+    ).resolves.toBeUndefined()
+
+    const output = res.writes.join('')
+    expect(output).toContain('event: message_start')
+    expect(output).toContain('event: content_block_delta')
+    expect(output).toContain('hello')
+    expect(output).toContain('event: message_stop')
+    expect(res.end).toHaveBeenCalledTimes(1)
+  })
+
+  test('records stream usage without blocking stream completion', async () => {
+    const apiKeyService = require('../src/services/apiKeyService')
+    const rateLimitHelper = require('../src/utils/rateLimitHelper')
+
+    let resolveUsage
+    const usagePromise = new Promise((resolve) => {
+      resolveUsage = resolve
+    })
+    apiKeyService.recordUsageWithDetails.mockReturnValue(usagePromise)
+
+    githubCopilotAccountService.getAccount.mockResolvedValue({
+      id: 'copilot-1',
+      name: 'Copilot 1',
+      accountType: 'individual'
+    })
+
+    githubCopilotRelayService.handleRequest.mockImplementation(async (_openAIReq, captureRes) => {
+      captureRes.status(200)
+      captureRes.setHeader('Content-Type', 'text/event-stream')
+      captureRes.write(
+        'data: {"id":"chatcmpl-usage","model":"gpt-4.1","choices":[{"delta":{"role":"assistant"}}]}\n\n'
+      )
+      captureRes.write(
+        'data: {"id":"chatcmpl-usage","model":"gpt-4.1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":2}}}\n\n'
+      )
+      captureRes.end('data: [DONE]\n\n')
+    })
+
+    const req = createRequest(
+      {
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Ping' }] }],
+        stream: true
+      },
+      {
+        id: 'key-1',
+        openaiAccountId: 'copilot:copilot-1'
+      }
+    )
+    req.rateLimitInfo = { tokenCountKey: 'tokens', costCountKey: 'cost' }
+    const res = createJsonResponse()
+
+    await githubCopilotClaudeRelayService.handleMessages(req, res, req.apiKey)
+
+    expect(res.end).toHaveBeenCalled()
+    expect(apiKeyService.recordUsageWithDetails).toHaveBeenCalledWith(
+      'key-1',
+      {
+        input_tokens: 3,
+        output_tokens: 3,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 2
+      },
+      'gpt-4.1',
+      'copilot-1',
+      'github-copilot',
+      { requestId: 'detail-1' }
+    )
+
+    resolveUsage({ totalTokens: 6, totalCost: 0.0001 })
+    await usagePromise
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(rateLimitHelper.updateRateLimitCounters).toHaveBeenCalledWith(
+      req.rateLimitInfo,
+      {
+        inputTokens: 3,
+        outputTokens: 3,
+        cacheCreateTokens: 0,
+        cacheReadTokens: 2
+      },
+      'gpt-4.1',
+      'key-1',
+      'github-copilot',
+      { totalTokens: 6, totalCost: 0.0001 }
+    )
+  })
+
+  test('records stream usage with mapped OpenAI model when upstream usage chunk omits model', async () => {
+    const apiKeyService = require('../src/services/apiKeyService')
+
+    githubCopilotAccountService.getAccount.mockResolvedValue({
+      id: 'copilot-1',
+      name: 'Copilot 1',
+      accountType: 'individual'
+    })
+
+    githubCopilotRelayService.handleRequest.mockImplementation(async (_openAIReq, captureRes) => {
+      captureRes.status(200)
+      captureRes.setHeader('Content-Type', 'text/event-stream')
+      captureRes.write('data: {"id":"chatcmpl-usage","choices":[{"delta":{"role":"assistant"}}]}\n\n')
+      captureRes.write(
+        'data: {"id":"chatcmpl-usage","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}\n\n'
+      )
+      captureRes.end('data: [DONE]\n\n')
+    })
+
+    const req = createRequest(
+      {
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Ping' }] }],
+        stream: true
+      },
+      {
+        id: 'key-1',
+        openaiAccountId: 'copilot:copilot-1'
+      }
+    )
+    const res = createJsonResponse()
+
+    await githubCopilotClaudeRelayService.handleMessages(req, res, req.apiKey)
+
+    expect(apiKeyService.recordUsageWithDetails).toHaveBeenCalledWith(
+      'key-1',
+      {
+        input_tokens: 4,
+        output_tokens: 2,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0
+      },
+      'gpt-4.1',
+      'copilot-1',
+      'github-copilot',
+      { requestId: 'detail-1' }
+    )
+  })
+
+  test('turns malformed stream chunks into safe Anthropic SSE errors', async () => {
+    githubCopilotAccountService.getAccount.mockResolvedValue({
+      id: 'copilot-1',
+      name: 'Copilot 1',
+      accountType: 'individual'
+    })
+
+    githubCopilotRelayService.handleRequest.mockImplementation(async (_openAIReq, captureRes) => {
+      captureRes.status(200)
+      captureRes.setHeader('Content-Type', 'text/event-stream')
+      captureRes.write('data: {"id":')
+      captureRes.end('"broken"\n\n')
+    })
+
+    const req = createRequest(
+      {
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Ping' }] }],
+        stream: true
+      },
+      {
+        id: 'key-1',
+        openaiAccountId: 'copilot:copilot-1'
+      }
+    )
+    const res = createJsonResponse()
+
+    await expect(
+      githubCopilotClaudeRelayService.handleMessages(req, res, req.apiKey)
+    ).resolves.toBeUndefined()
+
+    const output = res.writes.join('')
+    expect(output).toContain('event: error')
+    expect(output).toContain('api_error')
+    expect(res.end).toHaveBeenCalled()
+  })
+
+  test('non-2xx stream responses return a safe Anthropic SSE error event', async () => {
+    githubCopilotAccountService.getAccount.mockResolvedValue({
+      id: 'copilot-1',
+      name: 'Copilot 1',
+      accountType: 'individual'
+    })
+
+    githubCopilotRelayService.handleRequest.mockImplementation(async (_openAIReq, captureRes) => {
+      captureRes.status(429)
+      captureRes.setHeader('Content-Type', 'text/event-stream')
+      captureRes.json({ error: { message: 'rate limited' } })
+    })
+
+    const req = createRequest(
+      {
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Ping' }] }],
+        stream: true
+      },
+      {
+        id: 'key-1',
+        openaiAccountId: 'copilot:copilot-1'
+      }
+    )
+    const res = createJsonResponse()
+
+    await expect(
+      githubCopilotClaudeRelayService.handleMessages(req, res, req.apiKey)
+    ).resolves.toBeUndefined()
+
+    const output = res.writes.join('')
+    expect(output).toContain('event: error')
+    expect(output).toContain('rate limited')
+    expect(res.json).not.toHaveBeenCalled()
+    expect(res.end).toHaveBeenCalled()
   })
 
   test('returns 404 when the bound GitHub Copilot account does not exist', async () => {

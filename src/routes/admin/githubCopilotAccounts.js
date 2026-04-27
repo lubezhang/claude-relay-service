@@ -1,10 +1,14 @@
 const crypto = require('crypto')
 const express = require('express')
+const axios = require('axios')
 
 const githubCopilotAccountService = require('../../services/account/githubCopilotAccountService')
+const { buildCopilotBaseUrl, buildCopilotHeaders } = require('../../services/githubCopilotProtocol')
 const redis = require('../../models/redis')
 const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
+const ProxyHelper = require('../../utils/proxyHelper')
+const { extractErrorMessage } = require('../../utils/testPayloadHelper')
 
 const router = express.Router()
 const AUTH_SESSION_KEY_PREFIX = 'github_copilot_auth_session:'
@@ -18,6 +22,18 @@ function sanitizeError(error) {
     code: error?.code,
     status: error?.response?.status
   }
+}
+
+function resolveCopilotTestStatus(error) {
+  if (error?.response?.status) {
+    return error.response.status
+  }
+
+  if (error?.message === 'GitHub Copilot authorization failed') {
+    return 401
+  }
+
+  return 500
 }
 
 router.post('/github-copilot-accounts/auth/start', authenticateAdmin, async (req, res) => {
@@ -46,11 +62,13 @@ router.post('/github-copilot-accounts/auth/start', authenticateAdmin, async (req
 
     return res.json({
       success: true,
-      authSessionId,
-      user_code: authResult?.user_code,
-      verification_uri: authResult?.verification_uri,
-      expires_in: expiresIn,
-      interval
+      data: {
+        authSessionId,
+        user_code: authResult?.user_code,
+        verification_uri: authResult?.verification_uri,
+        expires_in: expiresIn,
+        interval
+      }
     })
   } catch (error) {
     logger.error('Failed to start GitHub Copilot device authorization:', sanitizeError(error))
@@ -86,7 +104,9 @@ router.post('/github-copilot-accounts/auth/poll', authenticateAdmin, async (req,
     }
 
     const session = JSON.parse(rawSession)
-    const pollResult = await githubCopilotAccountService.pollDeviceAuthorization(session.device_code)
+    const pollResult = await githubCopilotAccountService.pollDeviceAuthorization(
+      session.device_code
+    )
 
     if (pollResult?.error === 'authorization_pending') {
       return res.json({
@@ -171,10 +191,7 @@ router.put('/github-copilot-accounts/:id', authenticateAdmin, async (req, res) =
     const account = await githubCopilotAccountService.getAccount(id)
     return res.json({ success: true, data: account })
   } catch (error) {
-    logger.error(
-      `Failed to update GitHub Copilot account ${req.params.id}:`,
-      sanitizeError(error)
-    )
+    logger.error(`Failed to update GitHub Copilot account ${req.params.id}:`, sanitizeError(error))
     return res.status(500).json({
       success: false,
       error: 'Failed to update account',
@@ -192,14 +209,79 @@ router.delete('/github-copilot-accounts/:id', authenticateAdmin, async (req, res
       message: 'GitHub Copilot account deleted successfully'
     })
   } catch (error) {
-    logger.error(
-      `Failed to delete GitHub Copilot account ${req.params.id}:`,
-      sanitizeError(error)
-    )
+    logger.error(`Failed to delete GitHub Copilot account ${req.params.id}:`, sanitizeError(error))
     return res.status(500).json({
       success: false,
       error: 'Failed to delete account',
       message: error.message
+    })
+  }
+})
+
+router.post('/github-copilot-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
+  const { accountId } = req.params
+  const { model = 'gpt-4.1' } = req.body || {}
+  const startTime = Date.now()
+
+  try {
+    const account = await githubCopilotAccountService.getAccount(accountId)
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' })
+    }
+
+    const copilotToken = await githubCopilotAccountService.ensureCopilotToken(accountId)
+    const apiUrl = `${buildCopilotBaseUrl(account)}/chat/completions`
+    const payload = {
+      model,
+      stream: false,
+      n: 1,
+      messages: [{ role: 'user', content: 'Say "Hello" in one short sentence.' }]
+    }
+    const requestConfig = {
+      headers: buildCopilotHeaders(account, copilotToken, {
+        stream: false,
+        intent: 'conversation-panel'
+      }),
+      timeout: 30000
+    }
+
+    if (account.proxy) {
+      const proxyAgent = ProxyHelper.createProxyAgent(account.proxy)
+      if (proxyAgent) {
+        requestConfig.httpAgent = proxyAgent
+        requestConfig.httpsAgent = proxyAgent
+        requestConfig.proxy = false
+      }
+    }
+
+    const response = await axios.post(apiUrl, payload, requestConfig)
+    const latency = Date.now() - startTime
+    const responseText = response.data?.choices?.[0]?.message?.content || ''
+
+    logger.success(
+      `✅ GitHub Copilot account test passed: ${account.name} (${accountId}), latency: ${latency}ms`
+    )
+
+    return res.json({
+      success: true,
+      data: {
+        accountId,
+        accountName: account.name,
+        model,
+        latency,
+        responseText: responseText.substring(0, 200)
+      }
+    })
+  } catch (error) {
+    const latency = Date.now() - startTime
+    const status = resolveCopilotTestStatus(error)
+    logger.error(`❌ GitHub Copilot account test failed: ${accountId}`, sanitizeError(error))
+
+    return res.status(status).json({
+      success: false,
+      error: 'Test failed',
+      message: extractErrorMessage(error.response?.data, error.message),
+      latency
     })
   }
 })

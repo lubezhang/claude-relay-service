@@ -1,5 +1,11 @@
 const protocolBridge = require('../../adapters/llm-protocol-bridge')
 const logger = require('../../utils/logger')
+const { updateRateLimitCounters } = require('../../utils/rateLimitHelper')
+const {
+  createRequestDetailMeta,
+  extractOpenAICacheReadTokens
+} = require('../../utils/requestDetailHelper')
+const apiKeyService = require('../apiKeyService')
 const githubCopilotAccountService = require('../account/githubCopilotAccountService')
 const githubCopilotRelayService = require('./githubCopilotRelayService')
 
@@ -111,10 +117,24 @@ function mapAnthropicToolChoice(toolChoice) {
 }
 
 function anthropicMessagesToOpenAI(payload = {}) {
+  const translatedRequest = protocolBridge.translateRequest({
+    sourceProtocol: 'anthropic.messages',
+    targetProtocol: 'openai.chat_completions',
+    body: payload,
+    options: {
+      modelMapping: {
+        [payload.model]: mapAnthropicModel(payload.model)
+      }
+    }
+  })
+
+  const translatedBody = translatedRequest.body || {}
   const openAIMessages = []
 
   if (payload.system) {
-    const systemBlocks = Array.isArray(payload.system) ? payload.system : [{ type: 'text', text: payload.system }]
+    const systemBlocks = Array.isArray(payload.system)
+      ? payload.system
+      : [{ type: 'text', text: payload.system }]
     const systemText = normalizeTextBlocks(systemBlocks).join('\n\n')
     if (systemText) {
       openAIMessages.push({ role: 'system', content: systemText })
@@ -180,34 +200,10 @@ function anthropicMessagesToOpenAI(payload = {}) {
     }
   }
 
-  const translated = {
-    model: mapAnthropicModel(payload.model),
-    messages: openAIMessages,
-    stream: payload.stream === true
-  }
-
-  if (payload.max_tokens !== undefined) {
-    translated.max_tokens = payload.max_tokens
-  }
-
-  if (payload.temperature !== undefined) {
-    translated.temperature = payload.temperature
-  }
-
-  if (payload.top_p !== undefined) {
-    translated.top_p = payload.top_p
-  }
-
-  if (payload.stop_sequences !== undefined) {
-    translated.stop = payload.stop_sequences
-  }
-
-  if (payload.metadata?.user_id) {
-    translated.user = payload.metadata.user_id
-  }
+  translatedBody.messages = openAIMessages
 
   if (Array.isArray(payload.tools) && payload.tools.length > 0) {
-    translated.tools = payload.tools.map((tool) => ({
+    translatedBody.tools = payload.tools.map((tool) => ({
       type: 'function',
       function: {
         name: tool.name,
@@ -219,16 +215,16 @@ function anthropicMessagesToOpenAI(payload = {}) {
 
   const toolChoice = mapAnthropicToolChoice(payload.tool_choice)
   if (toolChoice !== undefined) {
-    translated.tool_choice = toolChoice
+    translatedBody.tool_choice = toolChoice
   }
 
-  if (translated.stream) {
-    translated.stream_options = {
+  if (translatedBody.stream) {
+    translatedBody.stream_options = {
       include_usage: true
     }
   }
 
-  return translated
+  return translatedBody
 }
 
 function mapOpenAIStopReason(stopReason) {
@@ -320,7 +316,197 @@ function openAIErrorToAnthropic(errorPayload = {}, statusCode = 500) {
   }
 }
 
-function createCaptureResponse(res, sessionId) {
+function buildAnthropicStreamError(message = 'GitHub Copilot stream translation failed') {
+  return `event: error\ndata: ${JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'api_error',
+      message
+    }
+  })}\n\n`
+}
+
+function extractDataPayloadsFromSSE(eventText = '') {
+  return eventText
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+    .filter(Boolean)
+}
+
+function captureOpenAIStreamUsage(eventText, streamState) {
+  for (const payload of extractDataPayloadsFromSSE(eventText)) {
+    if (payload === '[DONE]') {
+      streamState.doneReceived = true
+      continue
+    }
+
+    try {
+      const data = JSON.parse(payload)
+      if (data?.model) {
+        streamState.model = data.model
+      }
+      if (data?.usage) {
+        streamState.usage = data.usage
+        if (data.model) {
+          streamState.usageModel = data.model
+        }
+      }
+    } catch (error) {
+      // Parsing errors are handled by bridge translation; do not log payload contents.
+    }
+  }
+}
+
+function recordStreamUsageFireAndForget({ req, account, apiKeyData, streamState, mappedModel }) {
+  const usageData = streamState.usage
+  if (!usageData || !apiKeyData?.id || !account?.id) {
+    return
+  }
+
+  const totalInputTokens = usageData.input_tokens || usageData.prompt_tokens || 0
+  const outputTokens = usageData.output_tokens || usageData.completion_tokens || 0
+  const cacheReadTokens = extractOpenAICacheReadTokens(usageData)
+  const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
+  const cacheCreateTokens = usageData.cache_creation_input_tokens || 0
+  const usageObject = {
+    input_tokens: actualInputTokens,
+    output_tokens: outputTokens,
+    cache_creation_input_tokens: cacheCreateTokens,
+    cache_read_input_tokens: cacheReadTokens
+  }
+  const model = streamState.usageModel || streamState.model || mappedModel || 'unknown'
+
+  apiKeyService
+    .recordUsageWithDetails(
+      apiKeyData.id,
+      usageObject,
+      model,
+      account.id,
+      'github-copilot',
+      createRequestDetailMeta(req, {
+        requestBody: req.body,
+        stream: true,
+        statusCode: 200
+      })
+    )
+    .then((costs) => {
+      if (!req.rateLimitInfo) {
+        return null
+      }
+
+      return updateRateLimitCounters(
+        req.rateLimitInfo,
+        {
+          inputTokens: actualInputTokens,
+          outputTokens,
+          cacheCreateTokens,
+          cacheReadTokens
+        },
+        model,
+        apiKeyData.id,
+        'github-copilot',
+        costs
+      )
+    })
+    .catch((error) => {
+      logger.error('Failed to record GitHub Copilot Claude stream usage:', {
+        message: error?.message,
+        code: error?.code
+      })
+    })
+}
+
+function createCaptureResponse(res, sessionId, options = {}) {
+  let streamBuffer = ''
+  let streamFailed = false
+  let usageRecorded = false
+  let streamHeadersPrepared = false
+  let streamHeadersFlushed = false
+  const { req, account, apiKeyData, streamState = {}, mappedModel } = options
+
+  const ensureAnthropicStreamHeaders = () => {
+    if (streamHeadersFlushed || res.writableEnded || res.destroyed) {
+      return
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    if (!res.getHeader('Connection')) {
+      res.setHeader('Connection', 'keep-alive')
+    }
+    res.setHeader('X-Accel-Buffering', 'no')
+    if (res.socket && typeof res.socket.setNoDelay === 'function') {
+      res.socket.setNoDelay(true)
+    }
+    if (typeof res.flushHeaders === 'function' && !res.headersSent) {
+      res.flushHeaders()
+    }
+    captureRes.headersSent = true
+    streamHeadersFlushed = true
+  }
+
+  const writeAnthropicStreamError = (message) => {
+    if (!streamFailed && !res.writableEnded && !res.destroyed) {
+      streamFailed = true
+      ensureAnthropicStreamHeaders()
+      res.write(buildAnthropicStreamError(message))
+    }
+  }
+
+  const translateCompleteSSEEvent = (eventText) => {
+    captureOpenAIStreamUsage(eventText, streamState)
+
+    try {
+      const translated = protocolBridge.translateStreamChunk({
+        sourceProtocol: 'openai.chat_completions',
+        targetProtocol: 'anthropic.messages',
+        chunk: `${eventText}\n\n`,
+        sessionId
+      })
+
+      if (translated?.chunk && !res.writableEnded && !res.destroyed) {
+        ensureAnthropicStreamHeaders()
+        captureRes.headersSent = true
+        res.write(translated.chunk)
+      }
+    } catch (error) {
+      logger.warn('Failed to translate GitHub Copilot stream chunk:', {
+        message: error?.message,
+        code: error?.code
+      })
+      writeAnthropicStreamError('GitHub Copilot stream translation failed')
+    }
+
+    return true
+  }
+
+  const flushCompleteSSEEvents = () => {
+    let separatorIndex = streamBuffer.indexOf('\n\n')
+    while (separatorIndex !== -1) {
+      const eventText = streamBuffer.slice(0, separatorIndex)
+      streamBuffer = streamBuffer.slice(separatorIndex + 2)
+      if (eventText.trim()) {
+        translateCompleteSSEEvent(eventText)
+      }
+      separatorIndex = streamBuffer.indexOf('\n\n')
+    }
+  }
+
+  const finishStream = () => {
+    if (streamBuffer.trim()) {
+      writeAnthropicStreamError('GitHub Copilot stream ended with an incomplete SSE event')
+      streamBuffer = ''
+    }
+
+    protocolBridge.resetStream(sessionId)
+
+    if (!usageRecorded && req && account && apiKeyData) {
+      usageRecorded = true
+      recordStreamUsageFireAndForget({ req, account, apiKeyData, streamState, mappedModel })
+    }
+  }
+
   const captureRes = {
     statusCode: 200,
     headers: {},
@@ -346,19 +532,7 @@ function createCaptureResponse(res, sessionId) {
     setHeader(key, value) {
       captureRes.headers[key] = value
       if (key.toLowerCase() === 'content-type' && value === 'text/event-stream') {
-        res.setHeader('Content-Type', 'text/event-stream')
-        res.setHeader('Cache-Control', 'no-cache')
-        if (!res.getHeader('Connection')) {
-          res.setHeader('Connection', 'keep-alive')
-        }
-        res.setHeader('X-Accel-Buffering', 'no')
-        if (res.socket && typeof res.socket.setNoDelay === 'function') {
-          res.socket.setNoDelay(true)
-        }
-        if (typeof res.flushHeaders === 'function' && !res.headersSent) {
-          res.flushHeaders()
-        }
-        captureRes.headersSent = true
+        streamHeadersPrepared = true
       } else if (!res.headersSent) {
         res.setHeader(key, value)
       }
@@ -372,32 +546,35 @@ function createCaptureResponse(res, sessionId) {
     },
     json(payload) {
       if (captureRes.statusCode >= 400) {
+        if (streamHeadersPrepared || streamHeadersFlushed) {
+          writeAnthropicStreamError(payload?.error?.message || 'GitHub Copilot relay request failed')
+          captureRes.writableEnded = true
+          if (!res.writableEnded) {
+            res.end()
+          }
+          return captureRes
+        }
+
         return res.status(captureRes.statusCode).json(openAIErrorToAnthropic(payload, captureRes.statusCode))
       }
 
       return res.status(captureRes.statusCode).json(openAIResponseToAnthropic(payload))
     },
     write(chunk) {
-      const textChunk = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
-      const translated = protocolBridge.translateStreamChunk({
-        sourceProtocol: 'openai.chat_completions',
-        targetProtocol: 'anthropic.messages',
-        chunk: textChunk,
-        sessionId
-      })
-
-      if (translated?.chunk) {
-        captureRes.headersSent = true
-        return res.write(translated.chunk)
+      if (streamFailed) {
+        return true
       }
 
+      const textChunk = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
+      streamBuffer += textChunk.replace(/\r\n/g, '\n')
+      flushCompleteSSEEvents()
       return true
     },
     end(chunk) {
       if (chunk) {
         captureRes.write(chunk)
       }
-      protocolBridge.resetStream(sessionId)
+      finishStream()
       captureRes.writableEnded = true
       if (!res.writableEnded) {
         res.end()
@@ -408,6 +585,7 @@ function createCaptureResponse(res, sessionId) {
 
   return captureRes
 }
+
 
 async function handleMessages(req, res, apiKeyData = {}) {
   const openaiAccountBinding = apiKeyData?.openaiAccountId || ''
@@ -436,7 +614,13 @@ async function handleMessages(req, res, apiKeyData = {}) {
 
   const openAIBody = anthropicMessagesToOpenAI(req.body)
   const sessionId = req.requestId || `github-copilot-claude-${Date.now()}-${Math.random()}`
-  const captureRes = createCaptureResponse(res, sessionId)
+  const captureRes = createCaptureResponse(res, sessionId, {
+    req,
+    account,
+    apiKeyData,
+    streamState: {},
+    mappedModel: openAIBody.model
+  })
   const openAIReq = {
     ...req,
     body: openAIBody,

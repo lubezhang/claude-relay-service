@@ -24,6 +24,9 @@ jest.mock('../src/services/account/openaiAccountService', () => ({ getAccount: j
 jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
   getAccount: jest.fn()
 }))
+jest.mock('../src/services/account/githubCopilotAccountService', () => ({
+  getAccount: jest.fn()
+}))
 jest.mock('../src/services/account/azureOpenaiAccountService', () => ({ getAccount: jest.fn() }))
 jest.mock('../src/services/account/droidAccountService', () => ({ getAccount: jest.fn() }))
 jest.mock('../src/services/account/bedrockAccountService', () => ({ getAccount: jest.fn() }))
@@ -32,6 +35,7 @@ const redis = require('../src/models/redis')
 const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
 const claudeAccountService = require('../src/services/account/claudeAccountService')
 const openaiAccountService = require('../src/services/account/openaiAccountService')
+const githubCopilotAccountService = require('../src/services/account/githubCopilotAccountService')
 const bedrockAccountService = require('../src/services/account/bedrockAccountService')
 const requestDetailService = require('../src/services/requestDetailService')
 
@@ -318,6 +322,49 @@ describe('requestDetailService', () => {
     expect(result.retentionHours).toBe(6)
     expect(result.records).toHaveLength(1)
     expect(result.records[0].apiKeyName).toBe('Primary Key')
+  })
+
+  test('formats github-copilot account type label in request details', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: true
+    })
+
+    redis.getApiKey.mockResolvedValue({ name: 'Copilot Key' })
+    githubCopilotAccountService.getAccount.mockResolvedValue({ name: 'Copilot Main' })
+
+    redis.getClient.mockReturnValue({
+      zrangebyscore: jest.fn().mockResolvedValue(['req_copilot', '1775563200000']),
+      mget: jest.fn().mockResolvedValue([
+        JSON.stringify({
+          requestId: 'req_copilot',
+          timestamp: '2026-04-07T12:00:00.000Z',
+          endpoint: '/v1/messages',
+          method: 'POST',
+          apiKeyId: 'key_copilot',
+          accountId: 'copilot-1',
+          accountType: 'github-copilot',
+          model: 'gpt-4.1',
+          inputTokens: 10,
+          outputTokens: 2,
+          totalTokens: 12,
+          cost: 0.1,
+          durationMs: 200
+        })
+      ])
+    })
+
+    const result = await requestDetailService.listRequestDetails({
+      startDate: '2026-04-07T00:00:00.000Z',
+      endDate: '2026-04-07T23:59:59.000Z'
+    })
+
+    expect(result.records).toHaveLength(1)
+    expect(result.records[0].accountName).toBe('Copilot Main')
+    expect(result.records[0].accountType).toBe('github-copilot')
+    expect(result.records[0].accountTypeName).toBe('GitHub Copilot')
+    expect(result.availableFilters.accounts[0].accountTypeName).toBe('GitHub Copilot')
   })
 
   test('listRequestDetails derives reasoning from legacy preview-only records', async () => {

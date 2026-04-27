@@ -57,6 +57,7 @@ class AccountNameCacheService {
       const bedrockAccountService = require('./account/bedrockAccountService')
       const droidAccountService = require('./account/droidAccountService')
       const ccrAccountService = require('./account/ccrAccountService')
+      const githubCopilotAccountService = require('./account/githubCopilotAccountService')
       const accountGroupService = require('./accountGroupService')
 
       // 可选服务（可能不存在）
@@ -81,6 +82,7 @@ class AccountNameCacheService {
         geminiApiAccountService?.getAllAccounts() || Promise.resolve([]),
         openaiAccountService.getAllAccounts(),
         openaiResponsesAccountService?.getAllAccounts() || Promise.resolve([]),
+        githubCopilotAccountService.getAllAccounts(true),
         azureOpenaiAccountService.getAllAccounts(),
         bedrockAccountService.getAllAccounts(),
         droidAccountService.getAllAccounts(),
@@ -95,11 +97,12 @@ class AccountNameCacheService {
       const geminiApiAccounts = results[3].status === 'fulfilled' ? results[3].value : []
       const openaiAccounts = results[4].status === 'fulfilled' ? results[4].value : []
       const openaiResponsesAccounts = results[5].status === 'fulfilled' ? results[5].value : []
-      const azureOpenaiAccounts = results[6].status === 'fulfilled' ? results[6].value : []
-      const bedrockResult = results[7].status === 'fulfilled' ? results[7].value : { accounts: [] }
-      const droidAccounts = results[8].status === 'fulfilled' ? results[8].value : []
-      const ccrAccounts = results[9].status === 'fulfilled' ? results[9].value : []
-      const groups = results[10].status === 'fulfilled' ? results[10].value : []
+      const githubCopilotAccounts = results[6].status === 'fulfilled' ? results[6].value : []
+      const azureOpenaiAccounts = results[7].status === 'fulfilled' ? results[7].value : []
+      const bedrockResult = results[8].status === 'fulfilled' ? results[8].value : { accounts: [] }
+      const droidAccounts = results[9].status === 'fulfilled' ? results[9].value : []
+      const ccrAccounts = results[10].status === 'fulfilled' ? results[10].value : []
+      const groups = results[11].status === 'fulfilled' ? results[11].value : []
 
       // Bedrock 返回格式特殊处理
       const bedrockAccounts = Array.isArray(bedrockResult)
@@ -129,6 +132,7 @@ class AccountNameCacheService {
       addAccounts(geminiApiAccounts, 'gemini-api', 'api:')
       addAccounts(openaiAccounts, 'openai')
       addAccounts(openaiResponsesAccounts, 'openai-responses', 'responses:')
+      addAccounts(githubCopilotAccounts, 'github-copilot', 'copilot:')
       addAccounts(azureOpenaiAccounts, 'azure-openai')
       addAccounts(bedrockAccounts, 'bedrock')
       addAccounts(droidAccounts, 'droid')
@@ -190,6 +194,8 @@ class AccountNameCacheService {
       realId = accountId.substring(4)
     } else if (accountId.startsWith('responses:')) {
       realId = accountId.substring(10)
+    } else if (accountId.startsWith('copilot:')) {
+      realId = accountId.substring(8)
     }
 
     if (realId !== accountId) {
