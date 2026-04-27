@@ -1038,13 +1038,14 @@ const props = defineProps({
       claude: [],
       gemini: [],
       openai: [],
+      openaiResponses: [],
+      githubCopilot: [],
       bedrock: [],
       droid: [],
       claudeGroups: [],
       geminiGroups: [],
       openaiGroups: [],
-      droidGroups: [],
-      openaiResponses: []
+      droidGroups: []
     })
   }
 })
@@ -1464,6 +1465,7 @@ const refreshAccounts = async () => {
       geminiApiData,
       openaiData,
       openaiResponsesData,
+      githubCopilotData,
       bedrockData,
       droidData,
       groupsData
@@ -1474,6 +1476,7 @@ const refreshAccounts = async () => {
       httpApis.getGeminiApiAccountsApi(),
       httpApis.getOpenAIAccountsApi(),
       httpApis.getOpenAIResponsesAccountsApi(),
+      httpApis.getGithubCopilotAccountsApi(),
       httpApis.getBedrockAccountsApi(),
       httpApis.getDroidAccountsApi(),
       httpApis.getAccountGroupsApi()
@@ -1529,7 +1532,7 @@ const refreshAccounts = async () => {
 
     localAccounts.value.gemini = geminiAccounts
 
-    // 合并 OpenAI 和 OpenAI-Responses 账号
+    // 合并 OpenAI、OpenAI-Responses 和 GitHub Copilot 账号
     const openaiAccounts = []
 
     if (openaiData.success) {
@@ -1547,6 +1550,16 @@ const refreshAccounts = async () => {
         openaiAccounts.push({
           ...account,
           platform: 'openai-responses',
+          isDedicated: account.accountType === 'dedicated'
+        })
+      })
+    }
+
+    if (githubCopilotData.success) {
+      ;(githubCopilotData.data || []).forEach((account) => {
+        openaiAccounts.push({
+          ...account,
+          platform: 'github-copilot',
           isDedicated: account.accountType === 'dedicated'
         })
       })
@@ -1635,7 +1648,7 @@ onMounted(async () => {
       platform: account.platform || 'gemini' // 保留原有 platform，只在没有时设默认值
     }))
 
-    // props.accounts.openai 只包含 openai 类型，openaiResponses 需要单独处理
+    // props.accounts.openai 只包含 openai 类型，openaiResponses 和 githubCopilot 需要单独处理
     const openaiAccounts = []
     if (props.accounts.openai) {
       props.accounts.openai.forEach((account) => {
@@ -1650,6 +1663,14 @@ onMounted(async () => {
         openaiAccounts.push({
           ...account,
           platform: account.platform || 'openai-responses'
+        })
+      })
+    }
+    if (props.accounts.githubCopilot) {
+      props.accounts.githubCopilot.forEach((account) => {
+        openaiAccounts.push({
+          ...account,
+          platform: account.platform || 'github-copilot'
         })
       })
     }

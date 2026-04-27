@@ -595,16 +595,16 @@
                       }}</span>
                     </div>
                     <div
-                      v-else-if="account.platform === 'azure_openai'"
-                      class="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-gradient-to-r from-blue-100 to-cyan-100 px-2.5 py-1 dark:border-blue-700 dark:from-blue-900/20 dark:to-cyan-900/20"
+                      v-else-if="account.platform === 'github-copilot'"
+                      class="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-gradient-to-r from-gray-100 to-gray-200 px-2.5 py-1 dark:border-gray-600 dark:from-gray-800 dark:to-gray-700"
                     >
-                      <i class="fab fa-microsoft text-xs text-blue-700 dark:text-blue-400" />
-                      <span class="text-xs font-semibold text-blue-800 dark:text-blue-300"
-                        >Azure OpenAI</span
+                      <i class="fab fa-github text-xs text-gray-800 dark:text-gray-200" />
+                      <span class="text-xs font-semibold text-gray-900 dark:text-gray-100"
+                        >GitHub Copilot</span
                       >
-                      <span class="mx-1 h-4 w-px bg-blue-300 dark:bg-blue-600" />
-                      <span class="text-xs font-medium text-blue-700 dark:text-blue-400"
-                        >API Key</span
+                      <span class="mx-1 h-4 w-px bg-gray-400 dark:bg-gray-500" />
+                      <span class="text-xs font-medium text-gray-700 dark:text-gray-300"
+                        >OAuth</span
                       >
                     </div>
                     <div
@@ -1145,7 +1145,12 @@
                       </div>
                     </div>
                   </div>
-                  <div v-else-if="account.platform === 'openai'" class="space-y-2">
+                  <div
+                    v-else-if="
+                      account.platform === 'openai' || account.platform === 'github-copilot'
+                    "
+                    class="space-y-2"
+                  >
                     <div v-if="account.codexUsage" class="space-y-2">
                       <div class="rounded-lg bg-gray-50 p-2 dark:bg-gray-700/70">
                         <div class="flex items-center gap-2">
@@ -2395,6 +2400,7 @@ const supportedUsagePlatforms = [
   'claude',
   'claude-console',
   'openai',
+  'github-copilot',
   'openai-responses',
   'gemini',
   'droid',
@@ -2460,6 +2466,7 @@ const platformHierarchy = [
     icon: 'fa-openai',
     children: [
       { value: 'openai', label: 'OpenAI 官方', icon: 'fa-openai' },
+      { value: 'github-copilot', label: 'GitHub Copilot', icon: 'fab fa-github' },
       { value: 'openai-responses', label: 'OpenAI-Responses (Codex)', icon: 'fa-server' },
       { value: 'azure_openai', label: 'Azure OpenAI', icon: 'fab fa-microsoft' }
     ]
@@ -2484,7 +2491,7 @@ const platformHierarchy = [
 // 平台分组映射
 const platformGroupMap = {
   'group-claude': ['claude', 'claude-console', 'bedrock', 'ccr'],
-  'group-openai': ['openai', 'openai-responses', 'azure_openai'],
+  'group-openai': ['openai', 'github-copilot', 'openai-responses', 'azure_openai'],
   'group-gemini': ['gemini', 'gemini-api'],
   'group-droid': ['droid']
 }
@@ -2496,6 +2503,7 @@ const platformRequestHandlers = {
   bedrock: () => httpApis.getBedrockAccountsApi(),
   gemini: () => httpApis.getGeminiAccountsApi(),
   openai: () => httpApis.getOpenAIAccountsApi(),
+  'github-copilot': () => httpApis.getGithubCopilotAccountsApi(),
   azure_openai: () => httpApis.getAzureOpenAIAccountsApi(),
   'openai-responses': () => httpApis.getOpenAIResponsesAccountsApi(),
   ccr: () => httpApis.getCcrAccountsApi(),
@@ -2751,6 +2759,7 @@ const supportedTestPlatforms = [
   'gemini',
   'gemini-api',
   'openai-responses',
+  'github-copilot',
   'azure-openai',
   'droid',
   'ccr'
@@ -2937,6 +2946,7 @@ const accountStats = computed(() => {
     { value: 'gemini', label: 'Gemini' },
     { value: 'gemini-api', label: 'Gemini API' },
     { value: 'openai', label: 'OpenAI' },
+    { value: 'github-copilot', label: 'GitHub Copilot' },
     { value: 'azure_openai', label: 'Azure OpenAI' },
     { value: 'bedrock', label: 'Bedrock' },
     { value: 'openai-responses', label: 'OpenAI-Responses' },
@@ -3391,6 +3401,14 @@ const loadAccounts = async (forceReload = false) => {
           const items = list.map((acc) => {
             const boundApiKeysCount = counts.openaiAccountId?.[acc.id] || 0
             return { ...acc, platform: 'openai', boundApiKeysCount }
+          })
+          allAccounts.push(...items)
+          break
+        }
+        case 'github-copilot': {
+          const items = list.map((acc) => {
+            const boundApiKeysCount = counts.openaiAccountId?.[`copilot:${acc.id}`] || 0
+            return { ...acc, platform: 'github-copilot', boundApiKeysCount }
           })
           allAccounts.push(...items)
           break
@@ -3966,6 +3984,7 @@ const getBoundApiKeysForAccount = (account) => {
       key.openaiAccountId === accountId ||
       key.azureOpenaiAccountId === accountId ||
       key.openaiAccountId === `responses:${accountId}` ||
+      key.openaiAccountId === `copilot:${accountId}` ||
       key.geminiAccountId === `api:${accountId}`
     )
   })
@@ -3981,6 +4000,8 @@ const resolveAccountDeleteEndpoint = (account) => {
       return `/admin/bedrock-accounts/${account.id}`
     case 'openai':
       return `/admin/openai-accounts/${account.id}`
+    case 'github-copilot':
+      return `/admin/github-copilot-accounts/${account.id}`
     case 'azure_openai':
       return `/admin/azure-openai-accounts/${account.id}`
     case 'openai-responses':
@@ -5193,6 +5214,9 @@ const handleSaveAccountExpiry = async ({ accountId, expiresAt }) => {
         break
       case 'openai':
         endpoint = `/admin/openai-accounts/${accountId}` // 使用 :id
+        break
+      case 'github-copilot':
+        endpoint = `/admin/github-copilot-accounts/${accountId}` // 使用 :id
         break
       case 'droid':
         endpoint = `/admin/droid-accounts/${accountId}` // 使用 :id

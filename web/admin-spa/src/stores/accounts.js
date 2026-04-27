@@ -10,6 +10,7 @@ const PLATFORM_CONFIG = {
   bedrock: { endpoint: 'bedrock-accounts', stateKey: 'bedrockAccounts' },
   gemini: { endpoint: 'gemini-accounts', stateKey: 'geminiAccounts' },
   openai: { endpoint: 'openai-accounts', stateKey: 'openaiAccounts' },
+  'github-copilot': { endpoint: 'github-copilot-accounts', stateKey: 'githubCopilotAccounts' },
   azure_openai: { endpoint: 'azure-openai-accounts', stateKey: 'azureOpenaiAccounts' },
   'openai-responses': {
     endpoint: 'openai-responses-accounts',
@@ -24,6 +25,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   const bedrockAccounts = ref([])
   const geminiAccounts = ref([])
   const openaiAccounts = ref([])
+  const githubCopilotAccounts = ref([])
   const azureOpenaiAccounts = ref([])
   const openaiResponsesAccounts = ref([])
   const droidAccounts = ref([])
@@ -39,6 +41,7 @@ export const useAccountsStore = defineStore('accounts', () => {
     bedrockAccounts,
     geminiAccounts,
     openaiAccounts,
+    githubCopilotAccounts,
     azureOpenaiAccounts,
     openaiResponsesAccounts,
     droidAccounts
@@ -70,6 +73,8 @@ export const useAccountsStore = defineStore('accounts', () => {
   const fetchBedrockAccounts = () => fetchAccounts(httpApis.getBedrockAccountsApi, bedrockAccounts)
   const fetchGeminiAccounts = () => fetchAccounts(httpApis.getGeminiAccountsApi, geminiAccounts)
   const fetchOpenAIAccounts = () => fetchAccounts(httpApis.getOpenAIAccountsApi, openaiAccounts)
+  const fetchGithubCopilotAccounts = () =>
+    fetchAccounts(httpApis.getGithubCopilotAccountsApi, githubCopilotAccounts)
   const fetchAzureOpenAIAccounts = () =>
     fetchAccounts(httpApis.getAzureOpenAIAccountsApi, azureOpenaiAccounts)
   const fetchOpenAIResponsesAccounts = () =>
@@ -84,6 +89,7 @@ export const useAccountsStore = defineStore('accounts', () => {
       fetchBedrockAccounts(),
       fetchGeminiAccounts(),
       fetchOpenAIAccounts(),
+      fetchGithubCopilotAccounts(),
       fetchAzureOpenAIAccounts(),
       fetchOpenAIResponsesAccounts(),
       fetchDroidAccounts()
@@ -122,6 +128,8 @@ export const useAccountsStore = defineStore('accounts', () => {
     mutateAccount(httpApis.updateGeminiAccountApi, fetchGeminiAccounts, id, data)
   const updateOpenAIAccount = (id, data) =>
     mutateAccount(httpApis.updateOpenAIAccountApi, fetchOpenAIAccounts, id, data)
+  const updateGithubCopilotAccount = (id, data) =>
+    mutateAccount(httpApis.updateGithubCopilotAccountApi, fetchGithubCopilotAccounts, id, data)
   const updateAzureOpenAIAccount = (id, data) =>
     mutateAccount(httpApis.updateAzureOpenAIAccountApi, fetchAzureOpenAIAccounts, id, data)
   const updateOpenAIResponsesAccount = (id, data) =>
@@ -162,6 +170,7 @@ export const useAccountsStore = defineStore('accounts', () => {
         bedrock: fetchBedrockAccounts,
         gemini: fetchGeminiAccounts,
         openai: fetchOpenAIAccounts,
+        'github-copilot': fetchGithubCopilotAccounts,
         azure_openai: fetchAzureOpenAIAccounts,
         'openai-responses': fetchOpenAIResponsesAccounts,
         droid: fetchDroidAccounts
@@ -184,7 +193,28 @@ export const useAccountsStore = defineStore('accounts', () => {
     return res
   }
 
-  // OAuth 相关
+  const refreshGithubCopilotToken = async (id) => {
+    loading.value = true
+    const res = await httpApis.refreshGithubCopilotTokenApi(id)
+    if (res.success) await fetchGithubCopilotAccounts()
+    else error.value = res.message
+    loading.value = false
+    return res
+  }
+
+  const startGithubCopilotAuth = async (data) => {
+    const res = await httpApis.startGithubCopilotAuthApi(data)
+    if (!res.success) error.value = res.message
+    return res.success ? res.data : null
+  }
+
+  const pollGithubCopilotAuth = async (data) => {
+    const res = await httpApis.pollGithubCopilotAuthApi(data)
+    if (res.success && res.status === 'authorized') await fetchGithubCopilotAccounts()
+    if (!res.success) error.value = res.message
+    return res
+  }
+
   const generateClaudeAuthUrl = async (proxyConfig) => {
     const res = await httpApis.generateClaudeAuthUrlApi(proxyConfig)
     if (!res.success) error.value = res.message
@@ -268,6 +298,7 @@ export const useAccountsStore = defineStore('accounts', () => {
     bedrockAccounts.value = []
     geminiAccounts.value = []
     openaiAccounts.value = []
+    githubCopilotAccounts.value = []
     azureOpenaiAccounts.value = []
     openaiResponsesAccounts.value = []
     droidAccounts.value = []
@@ -283,6 +314,7 @@ export const useAccountsStore = defineStore('accounts', () => {
     bedrockAccounts,
     geminiAccounts,
     openaiAccounts,
+    githubCopilotAccounts,
     azureOpenaiAccounts,
     openaiResponsesAccounts,
     droidAccounts,
@@ -295,6 +327,7 @@ export const useAccountsStore = defineStore('accounts', () => {
     fetchBedrockAccounts,
     fetchGeminiAccounts,
     fetchOpenAIAccounts,
+    fetchGithubCopilotAccounts,
     fetchAzureOpenAIAccounts,
     fetchOpenAIResponsesAccounts,
     fetchDroidAccounts,
@@ -314,12 +347,16 @@ export const useAccountsStore = defineStore('accounts', () => {
     updateBedrockAccount,
     updateGeminiAccount,
     updateOpenAIAccount,
+    updateGithubCopilotAccount,
     updateAzureOpenAIAccount,
     updateOpenAIResponsesAccount,
     updateGeminiApiAccount,
     toggleAccount,
     deleteAccount,
     refreshClaudeToken,
+    refreshGithubCopilotToken,
+    startGithubCopilotAuth,
+    pollGithubCopilotAuth,
     generateClaudeAuthUrl,
     exchangeClaudeCode,
     generateClaudeSetupTokenUrl,

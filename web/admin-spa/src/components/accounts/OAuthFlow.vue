@@ -615,6 +615,185 @@
       </div>
     </div>
 
+    <!-- GitHub Copilot Device Code 授权流程 -->
+    <div v-else-if="platform === 'github-copilot'">
+      <div
+        class="rounded-lg border border-gray-300 bg-gray-50 p-6 dark:border-gray-600 dark:bg-gray-900/40"
+      >
+        <div class="flex items-start gap-4">
+          <div
+            class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-gray-900 dark:bg-gray-700"
+          >
+            <i class="fab fa-github text-white" />
+          </div>
+          <div class="flex-1">
+            <h4 class="mb-3 font-semibold text-gray-900 dark:text-gray-100">
+              GitHub Copilot 设备授权
+            </h4>
+            <p class="mb-4 text-sm text-gray-700 dark:text-gray-300">
+              请使用 GitHub Device Code 流程完成授权。系统会自动轮询授权结果，成功后立即返回。
+            </p>
+
+            <div class="space-y-4">
+              <div
+                class="rounded-lg border border-gray-300 bg-white/90 p-4 dark:border-gray-600 dark:bg-gray-800/80"
+              >
+                <div class="flex items-start gap-3">
+                  <div
+                    class="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gray-900 text-xs font-bold text-white dark:bg-gray-700"
+                  >
+                    1
+                  </div>
+                  <div class="flex-1">
+                    <p class="mb-2 font-medium text-gray-900 dark:text-gray-100">
+                      生成验证码并开始授权
+                    </p>
+                    <button
+                      v-if="!authUrl"
+                      class="btn btn-primary px-4 py-2 text-sm"
+                      :disabled="loading"
+                      @click="generateAuthUrl"
+                    >
+                      <i v-if="!loading" class="fas fa-link mr-2" />
+                      <div v-else class="loading-spinner mr-2" />
+                      {{ loading ? '生成中...' : '开始 Device Code 授权' }}
+                    </button>
+                    <div v-else class="space-y-4">
+                      <div class="space-y-2">
+                        <label class="text-xs font-semibold text-gray-600 dark:text-gray-300"
+                          >验证地址</label
+                        >
+                        <div
+                          class="flex flex-col gap-2 rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800"
+                        >
+                          <div class="flex items-center gap-2">
+                            <input
+                              class="form-input flex-1 bg-gray-50 font-mono text-xs dark:bg-gray-700"
+                              readonly
+                              type="text"
+                              :value="authUrl"
+                            />
+                            <button
+                              class="rounded-lg bg-gray-100 px-3 py-2 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600"
+                              title="复制链接"
+                              @click="copyAuthUrl"
+                            >
+                              <i :class="copied ? 'fas fa-check text-green-500' : 'fas fa-copy'" />
+                            </button>
+                          </div>
+                          <div class="flex flex-wrap items-center gap-2">
+                            <button
+                              class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm transition-colors hover:border-gray-300 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:border-gray-500 dark:hover:bg-gray-700"
+                              @click="openVerificationPage"
+                            >
+                              <i class="fas fa-external-link-alt text-xs" /> 在新标签中打开
+                            </button>
+                            <button
+                              class="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100"
+                              @click="regenerateAuthUrl"
+                            >
+                              <i class="fas fa-sync-alt text-xs" />重新生成
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="space-y-2">
+                        <label class="text-xs font-semibold text-gray-600 dark:text-gray-300"
+                          >授权验证码</label
+                        >
+                        <div
+                          class="flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900/60"
+                        >
+                          <span
+                            class="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100"
+                          >
+                            {{ userCode || '------' }}
+                          </span>
+                          <button
+                            class="rounded-lg bg-white px-3 py-1 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                            @click="copyUserCode"
+                          >
+                            <i class="fas fa-copy mr-1" />复制
+                          </button>
+                        </div>
+                      </div>
+
+                      <div
+                        class="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400"
+                      >
+                        <span>
+                          <i class="fas fa-hourglass-half mr-1 text-gray-600 dark:text-gray-300" />
+                          剩余有效期：{{ formattedCountdown }}
+                        </span>
+                        <span v-if="copilotPollIntervalSeconds > 0">
+                          <i class="fas fa-rotate mr-1 text-gray-600 dark:text-gray-300" />
+                          轮询间隔：{{ copilotPollIntervalSeconds }} 秒
+                        </span>
+                      </div>
+
+                      <div class="rounded-lg border p-3 text-sm" :class="copilotAuthStatusClass">
+                        <div class="flex items-start gap-2">
+                          <i class="mt-0.5" :class="copilotAuthStatusIcon" />
+                          <div>
+                            <p class="font-medium">{{ copilotAuthStatusTitle }}</p>
+                            <p class="mt-1 text-xs opacity-90">
+                              {{ copilotAuthStatusMessage }}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class="rounded-lg border border-gray-300 bg-white/90 p-4 dark:border-gray-600 dark:bg-gray-800/80"
+              >
+                <div class="flex items-start gap-3">
+                  <div
+                    class="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gray-900 text-xs font-bold text-white dark:bg-gray-700"
+                  >
+                    2
+                  </div>
+                  <div class="flex-1">
+                    <p class="mb-2 font-medium text-gray-900 dark:text-gray-100">
+                      在 GitHub 页面输入验证码并确认授权
+                    </p>
+                    <div class="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                      <p>打开上方验证地址，登录 GitHub 账户，输入验证码后授权 GitHub Copilot。</p>
+                      <p>授权成功后当前页面会自动检测并继续，无需手动粘贴 Token。</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class="rounded-lg border border-gray-300 bg-white/90 p-4 dark:border-gray-600 dark:bg-gray-800/80"
+              >
+                <div class="flex items-start gap-3">
+                  <div
+                    class="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gray-900 text-xs font-bold text-white dark:bg-gray-700"
+                  >
+                    3
+                  </div>
+                  <div class="flex-1">
+                    <p class="mb-2 font-medium text-gray-900 dark:text-gray-100">
+                      等待系统自动完成账户创建
+                    </p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400">
+                      如果自动轮询较慢，可以点击下方“完成授权”按钮立即检查一次授权状态。
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Droid OAuth流程 -->
     <div v-else-if="platform === 'droid'">
       <div
@@ -815,6 +994,10 @@ const props = defineProps({
   proxy: {
     type: Object,
     default: null
+  },
+  accountData: {
+    type: Object,
+    default: () => ({})
   }
 })
 
@@ -840,7 +1023,12 @@ const userCode = ref('')
 const verificationUri = ref('')
 const verificationUriComplete = ref('')
 const remainingSeconds = ref(0)
+const copilotAuthSessionId = ref('')
+const copilotPollIntervalSeconds = ref(0)
+const copilotAuthStatus = ref('idle')
+const copilotAuthMessage = ref('')
 let countdownTimer = null
+let copilotPollTimer = null
 
 // Cookie自动授权相关状态
 const authMethod = ref('manual') // 'manual' | 'cookie'
@@ -862,6 +1050,9 @@ const parsedSessionKeyCount = computed(() => {
 const canExchange = computed(() => {
   if (props.platform === 'droid') {
     return !!sessionId.value
+  }
+  if (props.platform === 'github-copilot') {
+    return !!copilotAuthSessionId.value
   }
   return authUrl.value && authCode.value.trim()
 })
@@ -900,9 +1091,141 @@ const stopCountdown = () => {
   }
 }
 
-// 监听授权码输入，自动提取URL中的code参数
+const stopCopilotPolling = () => {
+  if (copilotPollTimer) {
+    clearTimeout(copilotPollTimer)
+    copilotPollTimer = null
+  }
+}
+
+const scheduleCopilotPoll = (delaySeconds) => {
+  stopCopilotPolling()
+  const safeDelaySeconds = Math.max(
+    1,
+    Number(delaySeconds) || copilotPollIntervalSeconds.value || 5
+  )
+  copilotPollTimer = setTimeout(() => {
+    pollGithubCopilotAuthorization({ silentPending: true })
+  }, safeDelaySeconds * 1000)
+}
+
+const resetCopilotAuthState = () => {
+  stopCopilotPolling()
+  copilotAuthSessionId.value = ''
+  copilotPollIntervalSeconds.value = 0
+  copilotAuthStatus.value = 'idle'
+  copilotAuthMessage.value = ''
+}
+
+const pollGithubCopilotAuthorization = async ({ silentPending = false } = {}) => {
+  if (!copilotAuthSessionId.value) {
+    if (!silentPending) {
+      showToast('请先开始 Device Code 授权', 'warning')
+    }
+    return
+  }
+
+  exchanging.value = true
+  try {
+    const response = await accountsStore.pollGithubCopilotAuth({
+      authSessionId: copilotAuthSessionId.value
+    })
+
+    if (!response?.success) {
+      throw new Error(response?.message || response?.error || 'GitHub Copilot 授权轮询失败')
+    }
+
+    if (response.status === 'authorized') {
+      copilotAuthStatus.value = 'authorized'
+      copilotAuthMessage.value = '授权成功，正在创建账户。'
+      stopCopilotPolling()
+      stopCountdown()
+      emit('success', response.data)
+      return
+    }
+
+    if (response.status === 'slow_down') {
+      const nextInterval = Math.max(
+        copilotPollIntervalSeconds.value,
+        Number(response.interval) || copilotPollIntervalSeconds.value || 5
+      )
+      copilotPollIntervalSeconds.value = nextInterval
+      copilotAuthStatus.value = 'pending'
+      copilotAuthMessage.value = 'GitHub 要求放慢轮询速度，系统会自动继续重试。'
+      scheduleCopilotPoll(nextInterval)
+      return
+    }
+
+    if (response.status === 'expired') {
+      stopCopilotPolling()
+      stopCountdown()
+      copilotAuthStatus.value = 'expired'
+      copilotAuthMessage.value = '当前验证码已过期，请重新生成新的 Device Code。'
+      if (!silentPending) {
+        showToast('GitHub Copilot 授权已过期，请重新生成验证码', 'warning')
+      }
+      return
+    }
+
+    copilotAuthStatus.value = 'pending'
+    copilotAuthMessage.value = '等待您在 GitHub 页面确认授权，系统将自动继续检查。'
+    scheduleCopilotPoll(copilotPollIntervalSeconds.value || 5)
+    if (!silentPending) {
+      showToast('授权仍在等待确认，请在 GitHub 页面完成授权', 'info')
+    }
+  } catch (error) {
+    stopCopilotPolling()
+    copilotAuthStatus.value = 'error'
+    copilotAuthMessage.value = error.message || 'GitHub Copilot 授权失败，请稍后重试。'
+    if (!silentPending) {
+      showToast(copilotAuthMessage.value, 'error')
+    }
+  } finally {
+    exchanging.value = false
+  }
+}
+
+const copilotAuthStatusClass = computed(() => {
+  if (copilotAuthStatus.value === 'authorized') {
+    return 'border-green-200 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300'
+  }
+  if (copilotAuthStatus.value === 'expired') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  }
+  if (copilotAuthStatus.value === 'error') {
+    return 'border-red-200 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-300'
+  }
+  return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+})
+
+const copilotAuthStatusIcon = computed(() => {
+  if (copilotAuthStatus.value === 'authorized') return 'fas fa-check-circle'
+  if (copilotAuthStatus.value === 'expired') return 'fas fa-hourglass-end'
+  if (copilotAuthStatus.value === 'error') return 'fas fa-exclamation-circle'
+  return 'fas fa-spinner fa-spin'
+})
+
+const copilotAuthStatusTitle = computed(() => {
+  if (copilotAuthStatus.value === 'authorized') return '授权成功'
+  if (copilotAuthStatus.value === 'expired') return '验证码已过期'
+  if (copilotAuthStatus.value === 'error') return '授权失败'
+  if (copilotAuthStatus.value === 'pending') return '等待授权确认'
+  return '尚未开始授权'
+})
+
+const copilotAuthStatusMessage = computed(() => {
+  if (copilotAuthMessage.value) return copilotAuthMessage.value
+  if (copilotAuthStatus.value === 'pending') {
+    return '请在 GitHub 验证页面输入验证码并确认授权。'
+  }
+  if (copilotAuthStatus.value === 'idle') {
+    return '点击上方按钮生成 GitHub Device Code。'
+  }
+  return '请按照提示完成 GitHub Copilot 设备授权。'
+})
+
 watch(authCode, (newValue) => {
-  if (props.platform === 'droid') return
+  if (props.platform === 'droid' || props.platform === 'github-copilot') return
   if (!newValue || typeof newValue !== 'string') return
 
   const trimmedValue = newValue.trim()
@@ -967,6 +1290,7 @@ watch(authCode, (newValue) => {
 // 生成授权URL
 const generateAuthUrl = async () => {
   stopCountdown()
+  stopCopilotPolling()
   authUrl.value = ''
   authCode.value = ''
   userCode.value = ''
@@ -975,6 +1299,7 @@ const generateAuthUrl = async () => {
   remainingSeconds.value = 0
   sessionId.value = ''
   copied.value = false
+  resetCopilotAuthState()
   loading.value = true
   try {
     const proxyConfig = props.proxy?.enabled
@@ -1004,6 +1329,20 @@ const generateAuthUrl = async () => {
       const result = await accountsStore.generateOpenAIAuthUrl(proxyConfig)
       authUrl.value = result.authUrl
       sessionId.value = result.sessionId
+    } else if (props.platform === 'github-copilot') {
+      const result = await accountsStore.startGithubCopilotAuth({
+        accountData: props.accountData || {}
+      })
+      authUrl.value = result.verification_uri
+      verificationUri.value = result.verification_uri
+      verificationUriComplete.value = result.verification_uri
+      userCode.value = result.user_code
+      copilotAuthSessionId.value = result.authSessionId
+      copilotPollIntervalSeconds.value = Number(result.interval) || 5
+      copilotAuthStatus.value = 'pending'
+      copilotAuthMessage.value = '验证码已生成，请在 GitHub 页面输入验证码并确认授权。'
+      startCountdown(result.expires_in || 900)
+      scheduleCopilotPoll(copilotPollIntervalSeconds.value)
     } else if (props.platform === 'droid') {
       const result = await accountsStore.generateDroidAuthUrl(proxyConfig)
       authUrl.value = result.verificationUriComplete || result.verificationUri
@@ -1025,6 +1364,7 @@ const generateAuthUrl = async () => {
 // 重新生成授权URL
 const regenerateAuthUrl = () => {
   stopCountdown()
+  stopCopilotPolling()
   authUrl.value = ''
   authCode.value = ''
   userCode.value = ''
@@ -1032,6 +1372,7 @@ const regenerateAuthUrl = () => {
   verificationUriComplete.value = ''
   remainingSeconds.value = 0
   sessionId.value = ''
+  resetCopilotAuthState()
   generateAuthUrl()
 }
 
@@ -1094,6 +1435,11 @@ const openVerificationPage = () => {
 // 交换授权码
 const exchangeCode = async () => {
   if (!canExchange.value) return
+
+  if (props.platform === 'github-copilot') {
+    await pollGithubCopilotAuthorization()
+    return
+  }
 
   exchanging.value = true
   try {
@@ -1173,6 +1519,7 @@ const exchangeCode = async () => {
 
 onBeforeUnmount(() => {
   stopCountdown()
+  stopCopilotPolling()
 })
 
 // Cookie自动授权处理（支持批量）

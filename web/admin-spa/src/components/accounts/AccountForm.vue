@@ -381,33 +381,33 @@
                       <label
                         class="group relative flex cursor-pointer items-center rounded-md border p-2 transition-all"
                         :class="[
-                          form.platform === 'openai-responses'
-                            ? 'border-teal-500 bg-teal-50 dark:border-teal-400 dark:bg-teal-900/30'
-                            : 'border-gray-300 bg-white hover:border-teal-400 hover:bg-teal-50/50 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-teal-500 dark:hover:bg-teal-900/20'
+                          form.platform === 'github-copilot'
+                            ? 'border-gray-700 bg-gray-50 dark:border-gray-400 dark:bg-gray-800/80'
+                            : 'border-gray-300 bg-white hover:border-gray-500 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-400 dark:hover:bg-gray-800'
                         ]"
                       >
                         <input
                           v-model="form.platform"
                           class="sr-only"
                           type="radio"
-                          value="openai-responses"
+                          value="github-copilot"
                         />
                         <div class="flex items-center gap-2">
-                          <i class="fas fa-server text-sm text-teal-600 dark:text-teal-400"></i>
+                          <i class="fab fa-github text-sm text-gray-800 dark:text-gray-200"></i>
                           <div>
                             <span class="block text-xs font-medium text-gray-900 dark:text-gray-100"
-                              >Responses</span
+                              >GitHub Copilot</span
                             >
                             <span class="text-xs text-gray-500 dark:text-gray-400"
-                              >Openai-Responses</span
+                              >Device Code</span
                             >
                           </div>
                         </div>
                         <div
-                          v-if="form.platform === 'openai-responses'"
-                          class="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-teal-500"
+                          v-if="form.platform === 'github-copilot'"
+                          class="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-gray-800 dark:bg-gray-200"
                         >
-                          <i class="fas fa-check text-xs text-white"></i>
+                          <i class="fas fa-check text-xs text-white dark:text-gray-900"></i>
                         </div>
                       </label>
 
@@ -581,6 +581,7 @@
                 form.platform !== 'bedrock' &&
                 form.platform !== 'azure_openai' &&
                 form.platform !== 'openai-responses' &&
+                form.platform !== 'github-copilot' &&
                 form.platform !== 'gemini-api'
               "
             >
@@ -596,7 +597,13 @@
                     value="oauth"
                   />
                   <span class="text-sm text-gray-700 dark:text-gray-300">
-                    OAuth 授权<span v-if="form.platform === 'claude' || form.platform === 'openai'">
+                    OAuth 授权<span
+                      v-if="
+                        form.platform === 'claude' ||
+                        form.platform === 'openai' ||
+                        form.platform === 'github-copilot'
+                      "
+                    >
                       (用量可视化)</span
                     >
                   </span>
@@ -610,7 +617,10 @@
                   />
                   <span class="text-sm text-gray-700 dark:text-gray-300">Setup Token (效期长)</span>
                 </label>
-                <label class="flex cursor-pointer items-center">
+                <label
+                  v-if="form.platform !== 'github-copilot'"
+                  class="flex cursor-pointer items-center"
+                >
                   <input
                     v-model="form.addType"
                     class="mr-2 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
@@ -2332,6 +2342,7 @@
         <OAuthFlow
           v-if="oauthStep === 2 && form.addType === 'oauth'"
           ref="oauthFlowRef"
+          :account-data="oauthAccountData"
           :platform="form.platform"
           :proxy="form.proxy"
           @back="oauthStep = 1"
@@ -4142,7 +4153,8 @@ const autoProtectionPlatforms = [
   'gemini',
   'gemini-api',
   'openai',
-  'openai-responses'
+  'openai-responses',
+  'github-copilot'
 ]
 
 // OAuthFlow 组件引用
@@ -4193,7 +4205,7 @@ const showApiKeyManagement = ref(false)
 const determinePlatformGroup = (platform) => {
   if (['claude', 'claude-console', 'ccr', 'bedrock'].includes(platform)) {
     return 'claude'
-  } else if (['openai', 'openai-responses', 'azure_openai'].includes(platform)) {
+  } else if (['openai', 'openai-responses', 'azure_openai', 'github-copilot'].includes(platform)) {
     return 'openai'
   } else if (['gemini', 'gemini-antigravity', 'gemini-api'].includes(platform)) {
     return 'gemini'
@@ -4353,7 +4365,7 @@ const form = ref({
     const platform = props.account?.platform || 'claude'
     if (platform === 'gemini' || platform === 'gemini-antigravity' || platform === 'openai')
       return 'oauth'
-    if (platform === 'claude') return 'oauth'
+    if (platform === 'claude' || platform === 'github-copilot') return 'oauth'
     return 'manual'
   })(),
   name: props.account?.name || '',
@@ -4602,6 +4614,18 @@ const errors = ref({
   azureEndpoint: '',
   deploymentName: ''
 })
+
+const oauthAccountData = computed(() => ({
+  name: form.value.name,
+  description: form.value.description,
+  accountType: form.value.accountType,
+  groupId: form.value.accountType === 'group' ? form.value.groupId : undefined,
+  groupIds: form.value.accountType === 'group' ? form.value.groupIds : undefined,
+  expiresAt: form.value.expiresAt || undefined,
+  proxy: buildProxyPayload(form.value.proxy),
+  priority: form.value.priority || 50,
+  disableAutoProtection: !!form.value.disableAutoProtection
+}))
 
 // 计算是否可以进入下一步
 const canProceed = computed(() => {
@@ -5150,6 +5174,14 @@ const handleOAuthSuccess = async (tokenInfoOrList) => {
       data.openaiOauth = tokenInfo.tokens || tokenInfo
       data.accountInfo = tokenInfo.accountInfo
       data.priority = form.value.priority || 50
+    } else if (currentPlatform === 'github-copilot') {
+      const account = tokenInfo?.data || tokenInfo
+      if (!account?.id) {
+        throw new Error('GitHub Copilot 授权成功，但未返回已创建的账户信息')
+      }
+      showToast('GitHub Copilot 账户创建成功', 'success')
+      emit('success', account)
+      return
     } else if (currentPlatform === 'droid') {
       const rawTokens = tokenInfo.tokens || tokenInfo || {}
 
@@ -5638,6 +5670,8 @@ const createAccount = async () => {
       result = await accountsStore.createBedrockAccount(data)
     } else if (form.value.platform === 'openai') {
       result = await accountsStore.createOpenAIAccount(data)
+    } else if (form.value.platform === 'github-copilot') {
+      throw new Error('GitHub Copilot 请使用 OAuth 授权创建设备码账户')
     } else if (form.value.platform === 'azure_openai') {
       result = await accountsStore.createAzureOpenAIAccount(data)
     } else if (form.value.platform === 'gemini' || form.value.platform === 'gemini-antigravity') {
@@ -6010,6 +6044,8 @@ const updateAccount = async () => {
       await accountsStore.updateBedrockAccount(props.account.id, data)
     } else if (props.account.platform === 'openai') {
       await accountsStore.updateOpenAIAccount(props.account.id, data)
+    } else if (props.account.platform === 'github-copilot') {
+      await accountsStore.updateGithubCopilotAccount(props.account.id, data)
     } else if (props.account.platform === 'azure_openai') {
       await accountsStore.updateAzureOpenAIAccount(props.account.id, data)
     } else if (props.account.platform === 'gemini') {
@@ -6134,7 +6170,7 @@ const filteredGroups = computed(() => {
     platformFilter = 'claude'
   }
   // OpenAI-Responses 使用 OpenAI 分组
-  else if (form.value.platform === 'openai-responses') {
+  else if (form.value.platform === 'openai-responses' || form.value.platform === 'github-copilot') {
     platformFilter = 'openai'
   }
   // Gemini-API 使用 Gemini 分组
@@ -6218,6 +6254,9 @@ watch(
       form.value.addType = 'oauth'
     } else if (newPlatform === 'openai') {
       // 切换到 OpenAI 时，使用 OAuth 作为默认方式
+      form.value.addType = 'oauth'
+    } else if (newPlatform === 'github-copilot') {
+      // 切换到 GitHub Copilot 时，使用 Device Code OAuth 作为默认方式
       form.value.addType = 'oauth'
     } else if (newPlatform === 'gemini-api' || newPlatform === 'azure_openai') {
       // 切换到 Gemini API 或 Azure OpenAI 时，使用 apikey 模式（直接创建，不需要 OAuth 流程）

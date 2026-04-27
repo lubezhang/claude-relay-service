@@ -198,6 +198,20 @@ export const createAzureOpenAIAccountApi = (data) =>
 export const updateAzureOpenAIAccountApi = (id, data) =>
   request({ url: `/admin/azure-openai-accounts/${id}`, method: 'PUT', data })
 
+// GitHub Copilot 账户
+export const getGithubCopilotAccountsApi = () =>
+  request({ url: '/admin/github-copilot-accounts', method: 'GET' })
+export const startGithubCopilotAuthApi = (data) =>
+  request({ url: '/admin/github-copilot-accounts/auth/start', method: 'POST', data })
+export const pollGithubCopilotAuthApi = (data) =>
+  request({ url: '/admin/github-copilot-accounts/auth/poll', method: 'POST', data })
+export const updateGithubCopilotAccountApi = (id, data) =>
+  request({ url: `/admin/github-copilot-accounts/${id}`, method: 'PUT', data })
+export const deleteGithubCopilotAccountApi = (id) =>
+  request({ url: `/admin/github-copilot-accounts/${id}`, method: 'DELETE' })
+export const refreshGithubCopilotTokenApi = (id) =>
+  request({ url: `/admin/github-copilot-accounts/${id}/refresh-token`, method: 'POST' })
+
 // Droid 账户
 export const getDroidAccountsApi = () => request({ url: '/admin/droid-accounts', method: 'GET' })
 export const createDroidAccountApi = (data) =>

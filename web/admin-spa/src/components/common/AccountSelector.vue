@@ -241,6 +241,45 @@
               </div>
             </div>
 
+            <!-- GitHub Copilot 账号（仅 OpenAI） -->
+            <div v-if="platform === 'openai' && filteredGithubCopilotAccounts.length > 0">
+              <div
+                class="bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-500 dark:bg-gray-700 dark:text-gray-400"
+              >
+                GitHub Copilot 专属账号
+              </div>
+              <div
+                v-for="account in filteredGithubCopilotAccounts"
+                :key="account.id"
+                class="cursor-pointer px-4 py-2 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                :class="{
+                  'bg-blue-50 dark:bg-blue-900/20': modelValue === `copilot:${account.id}`
+                }"
+                @click="selectAccount(`copilot:${account.id}`)"
+              >
+                <div class="flex items-center justify-between">
+                  <div>
+                    <span class="text-gray-700 dark:text-gray-300">{{ account.name }}</span>
+                    <span
+                      class="ml-2 rounded-full px-2 py-0.5 text-xs"
+                      :class="
+                        account.isActive === 'true' || account.isActive === true
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                          : account.status === 'rate_limited'
+                            ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                            : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                      "
+                    >
+                      {{ getAccountStatusText(account) }}
+                    </span>
+                  </div>
+                  <span class="text-xs text-gray-400 dark:text-gray-500">
+                    {{ formatDate(account.createdAt) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <!-- Gemini-API 账号（仅 Gemini） -->
             <div v-if="platform === 'gemini' && filteredGeminiApiAccounts.length > 0">
               <div
@@ -383,6 +422,15 @@ const selectedLabel = computed(() => {
     return account ? `${account.name} (${getAccountStatusText(account)})` : ''
   }
 
+  // GitHub Copilot 账号
+  if (props.modelValue.startsWith('copilot:')) {
+    const accountId = props.modelValue.substring(8)
+    const account = props.accounts.find(
+      (a) => a.id === accountId && a.platform === 'github-copilot'
+    )
+    return account ? `${account.name} (${getAccountStatusText(account)})` : ''
+  }
+
   // Gemini-API 账号
   if (props.modelValue.startsWith('api:')) {
     const accountId = props.modelValue.substring(4)
@@ -517,6 +565,20 @@ const filteredOpenAIResponsesAccounts = computed(() => {
   return accounts
 })
 
+// 过滤的 GitHub Copilot 账号
+const filteredGithubCopilotAccounts = computed(() => {
+  if (props.platform !== 'openai') return []
+
+  let accounts = sortedAccounts.value.filter((a) => a.platform === 'github-copilot')
+
+  if (searchQuery.value) {
+    const query = searchQuery.value.toLowerCase()
+    accounts = accounts.filter((account) => account.name.toLowerCase().includes(query))
+  }
+
+  return accounts
+})
+
 // 过滤的 Gemini-API 账号
 const filteredGeminiApiAccounts = computed(() => {
   if (props.platform !== 'gemini') return []
@@ -538,6 +600,7 @@ const hasResults = computed(() => {
     filteredOAuthAccounts.value.length > 0 ||
     filteredConsoleAccounts.value.length > 0 ||
     filteredOpenAIResponsesAccounts.value.length > 0 ||
+    filteredGithubCopilotAccounts.value.length > 0 ||
     filteredGeminiApiAccounts.value.length > 0
   )
 })

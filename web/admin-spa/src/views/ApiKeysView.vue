@@ -526,10 +526,24 @@
                             <!-- OpenAI 绑定 -->
                             <div v-if="key.openaiAccountId" class="flex items-center gap-1 text-xs">
                               <span
-                                class="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
+                                :class="[
+                                  'inline-flex items-center rounded px-1.5 py-0.5',
+                                  key.openaiAccountId.startsWith('copilot:')
+                                    ? 'bg-gray-200 text-gray-800 dark:bg-gray-600 dark:text-gray-100'
+                                    : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                                ]"
                               >
-                                <i class="fa-openai mr-1 text-[10px]" />
-                                OpenAI
+                                <i
+                                  :class="[
+                                    key.openaiAccountId.startsWith('copilot:')
+                                      ? 'fab fa-github'
+                                      : 'fa-openai',
+                                    'mr-1 text-[10px]'
+                                  ]"
+                                />
+                                {{
+                                  key.openaiAccountId.startsWith('copilot:') ? 'Copilot' : 'OpenAI'
+                                }}
                               </span>
                               <span class="truncate text-gray-600 dark:text-gray-400">
                                 {{ getOpenAIBindingInfo(key) }}
@@ -1353,10 +1367,20 @@
                 <!-- OpenAI 绑定 -->
                 <div v-if="key.openaiAccountId" class="flex flex-wrap items-center gap-1 text-xs">
                   <span
-                    class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
+                    :class="[
+                      'inline-flex items-center rounded px-2 py-0.5',
+                      key.openaiAccountId.startsWith('copilot:')
+                        ? 'bg-gray-200 text-gray-800 dark:bg-gray-600 dark:text-gray-100'
+                        : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                    ]"
                   >
-                    <i class="fa-openai mr-1" />
-                    OpenAI
+                    <i
+                      :class="[
+                        key.openaiAccountId.startsWith('copilot:') ? 'fab fa-github' : 'fa-openai',
+                        'mr-1'
+                      ]"
+                    />
+                    {{ key.openaiAccountId.startsWith('copilot:') ? 'Copilot' : 'OpenAI' }}
                   </span>
                   <span class="text-gray-600 dark:text-gray-400">
                     {{ getOpenAIBindingInfo(key) }}
@@ -2273,6 +2297,7 @@ const accounts = ref({
   geminiApi: [], // 添加 Gemini-API 账号列表（用于传递给子组件初始化）
   openai: [],
   openaiResponses: [], // 添加 OpenAI-Responses 账号列表
+  githubCopilot: [],
   bedrock: [],
   droid: [],
   claudeGroups: [],
@@ -2477,6 +2502,7 @@ const loadAccounts = async (forceRefresh = false) => {
       geminiApiData,
       openaiData,
       openaiResponsesData,
+      githubCopilotData,
       bedrockData,
       droidData,
       groupsData
@@ -2487,6 +2513,7 @@ const loadAccounts = async (forceRefresh = false) => {
       httpApis.getGeminiApiAccountsApi(),
       httpApis.getOpenAIAccountsApi(),
       httpApis.getOpenAIResponsesAccountsApi(),
+      httpApis.getGithubCopilotAccountsApi(),
       httpApis.getBedrockAccountsApi(),
       httpApis.getDroidAccountsApi(),
       httpApis.getAccountGroupsApi()
@@ -2548,6 +2575,7 @@ const loadAccounts = async (forceRefresh = false) => {
     if (openaiData.success) {
       accounts.value.openai = (openaiData.data || []).map((account) => ({
         ...account,
+        platform: account.platform || 'openai',
         isDedicated: account.accountType === 'dedicated'
       }))
     }
@@ -2555,6 +2583,15 @@ const loadAccounts = async (forceRefresh = false) => {
     if (openaiResponsesData.success) {
       accounts.value.openaiResponses = (openaiResponsesData.data || []).map((account) => ({
         ...account,
+        platform: account.platform || 'openai-responses',
+        isDedicated: account.accountType === 'dedicated'
+      }))
+    }
+
+    if (githubCopilotData.success) {
+      accounts.value.githubCopilot = (githubCopilotData.data || []).map((account) => ({
+        ...account,
+        platform: account.platform || 'github-copilot',
         isDedicated: account.accountType === 'dedicated'
       }))
     }
@@ -3045,6 +3082,18 @@ const getBoundAccountName = (accountId) => {
     return `${realAccountId.substring(0, 8)}`
   }
 
+  // 处理 copilot: 前缀的 GitHub Copilot 账户
+  if (accountId.startsWith('copilot:')) {
+    const realAccountId = accountId.replace('copilot:', '')
+    const githubCopilotAccount = accounts.value.githubCopilot.find(
+      (acc) => acc.id === realAccountId
+    )
+    if (githubCopilotAccount) {
+      return `${githubCopilotAccount.name}`
+    }
+    return `${realAccountId.substring(0, 8)}`
+  }
+
   // 从OpenAI账户列表中查找
   const openaiAccount = accounts.value.openai.find((acc) => acc.id === accountId)
   if (openaiAccount) {
@@ -3055,6 +3104,11 @@ const getBoundAccountName = (accountId) => {
   const openaiResponsesAccount = accounts.value.openaiResponses.find((acc) => acc.id === accountId)
   if (openaiResponsesAccount) {
     return `${openaiResponsesAccount.name}`
+  }
+
+  const githubCopilotAccount = accounts.value.githubCopilot.find((acc) => acc.id === accountId)
+  if (githubCopilotAccount) {
+    return `${githubCopilotAccount.name}`
   }
 
   // 从Bedrock账户列表中查找
@@ -3162,6 +3216,9 @@ const getOpenAIBindingInfo = (key) => {
     if (key.openaiAccountId.startsWith('responses:')) {
       const realAccountId = key.openaiAccountId.replace('responses:', '')
       account = accounts.value.openaiResponses.find((acc) => acc.id === realAccountId)
+    } else if (key.openaiAccountId.startsWith('copilot:')) {
+      const realAccountId = key.openaiAccountId.replace('copilot:', '')
+      account = accounts.value.githubCopilot.find((acc) => acc.id === realAccountId)
     } else {
       // 查找普通 OpenAI 账户
       account = accounts.value.openai.find((acc) => acc.id === key.openaiAccountId)
@@ -3171,7 +3228,19 @@ const getOpenAIBindingInfo = (key) => {
       return `⚠️ ${info} (账户不存在)`
     }
     if (account.accountType === 'dedicated') {
+      if (key.openaiAccountId.startsWith('responses:')) {
+        return `🔒 Responses专属-${info}`
+      }
+      if (key.openaiAccountId.startsWith('copilot:')) {
+        return `🔒 Copilot专属-${info}`
+      }
       return `🔒 专属-${info}`
+    }
+    if (key.openaiAccountId.startsWith('responses:')) {
+      return `Responses-${info}`
+    }
+    if (key.openaiAccountId.startsWith('copilot:')) {
+      return `Copilot-${info}`
     }
     return info
   }
