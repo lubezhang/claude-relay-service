@@ -108,11 +108,7 @@ function normalizeAccountTypeKey(type) {
   if (lower === 'openai_responses' || lower === 'openai-response' || lower === 'openai-responses') {
     return 'openai-responses'
   }
-  if (
-    lower === 'github_copilot' ||
-    lower === 'github-copilot' ||
-    lower === 'copilot'
-  ) {
+  if (lower === 'github_copilot' || lower === 'github-copilot' || lower === 'copilot') {
     return 'github-copilot'
   }
   if (lower === 'azure_openai' || lower === 'azureopenai' || lower === 'azure-openai') {

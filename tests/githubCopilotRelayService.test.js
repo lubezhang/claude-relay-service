@@ -139,12 +139,16 @@ describe('githubCopilotRelayService', () => {
       getProxyDescription: jest.fn(() => 'none')
     }))
 
-    axios = require('axios')
-    githubCopilotAccountService = require('../src/services/account/githubCopilotAccountService')
-    apiKeyService = require('../src/services/apiKeyService')
-    rateLimitHelper = require('../src/utils/rateLimitHelper')
-    logger = require('../src/utils/logger')
-    relayService = require('../src/services/relay/githubCopilotRelayService')
+    jest.isolateModules(() => {
+      axios = require('axios')
+      githubCopilotAccountService = require('../src/services/account/githubCopilotAccountService')
+      apiKeyService = require('../src/services/apiKeyService')
+      rateLimitHelper = require('../src/utils/rateLimitHelper')
+      logger = require('../src/utils/logger')
+      relayService = require('../src/services/relay/githubCopilotRelayService')
+    })
+
+    relayService.defaultTimeout = 1234
   })
 
   afterEach(() => {

@@ -8,6 +8,7 @@ const geminiAccountService = require('./account/geminiAccountService')
 const geminiApiAccountService = require('./account/geminiApiAccountService')
 const openaiAccountService = require('./account/openaiAccountService')
 const openaiResponsesAccountService = require('./account/openaiResponsesAccountService')
+const githubCopilotAccountService = require('./account/githubCopilotAccountService')
 const azureOpenaiAccountService = require('./account/azureOpenaiAccountService')
 const droidAccountService = require('./account/droidAccountService')
 const bedrockAccountService = require('./account/bedrockAccountService')
@@ -36,6 +37,7 @@ const accountTypeNames = {
   ccr: 'Claude Console Relay',
   openai: 'OpenAI',
   'openai-responses': 'OpenAI Responses',
+  'github-copilot': 'GitHub Copilot',
   'azure-openai': 'Azure OpenAI',
   gemini: 'Gemini',
   'gemini-api': 'Gemini API',
@@ -50,6 +52,7 @@ const accountServices = {
   ccr: ccrAccountService,
   openai: openaiAccountService,
   'openai-responses': openaiResponsesAccountService,
+  'github-copilot': githubCopilotAccountService,
   'azure-openai': azureOpenaiAccountService,
   gemini: geminiAccountService,
   'gemini-api': geminiApiAccountService,
@@ -811,10 +814,7 @@ class RequestDetailService {
 
     const preferredService = accountServices[normalizedType]
     const servicesToTry = preferredService
-      ? [
-          [normalizedType, preferredService],
-          ...Object.entries(accountServices).filter(([type]) => type !== normalizedType)
-        ]
+      ? [[normalizedType, preferredService]]
       : Object.entries(accountServices)
 
     for (const [type, service] of servicesToTry) {
